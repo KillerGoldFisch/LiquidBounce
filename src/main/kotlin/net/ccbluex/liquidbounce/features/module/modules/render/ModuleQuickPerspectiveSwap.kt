@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,31 +16,14 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.features.module.modules.render
 
-import net.ccbluex.liquidbounce.event.events.WorldRenderEvent
-import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
-import net.ccbluex.liquidbounce.utils.client.chat
-import net.minecraft.client.util.InputUtil
-import org.lwjgl.glfw.GLFW
+import net.ccbluex.liquidbounce.features.module.ClientModule
+import net.ccbluex.liquidbounce.utils.input.InputBind
 
-object ModuleQuickPerspectiveSwap : Module("QuickPerspectiveSwap", Category.RENDER) {
-
-    private val onUpdate = handler<WorldRenderEvent> {
-        if (!InputUtil.isKeyPressed(mc.window.handle, bind)) {
-            this.enabled = false
-        }
-    }
-
-    override fun enable() {
-        if (this.bind == GLFW.GLFW_KEY_UNKNOWN) {
-            chat("You cannot use this module without a keybind as it will disable when the keybind isn't held anymore")
-
-            this.enabled = false
-        }
-    }
-
+object ModuleQuickPerspectiveSwap : ClientModule(
+    "QuickPerspectiveSwap", Category.RENDER, disableOnQuit = true, bindAction = InputBind.BindAction.HOLD
+) {
+    val rearView by boolean("RearView", false)
 }

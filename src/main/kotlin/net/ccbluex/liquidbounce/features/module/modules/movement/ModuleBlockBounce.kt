@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +21,7 @@ package net.ccbluex.liquidbounce.features.module.modules.movement
 import net.ccbluex.liquidbounce.event.events.PlayerJumpEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.ccbluex.liquidbounce.utils.block.isBlockAtPosition
 import net.ccbluex.liquidbounce.utils.entity.box
 import net.minecraft.block.BedBlock
@@ -33,21 +33,23 @@ import net.minecraft.block.SlimeBlock
  *
  * Allows you to bounce higher on bouncy blocks.
  */
-
-object ModuleBlockBounce : Module("BlockBounce", Category.MOVEMENT) {
+object ModuleBlockBounce : ClientModule("BlockBounce", Category.MOVEMENT) {
 
     private val motion by float("Motion", 0.42f, 0.2f..2f)
 
+    @Suppress("unused")
     val jumpHandler = handler<PlayerJumpEvent> { event ->
         if (standingOnBouncyBlock()) {
             event.motion += motion
         }
     }
 
-    fun standingOnBouncyBlock(): Boolean {
+    private fun standingOnBouncyBlock(): Boolean {
         val boundingBox = player.box
         val detectionBox = boundingBox.withMinY(boundingBox.minY - 0.01)
 
-        return isBlockAtPosition(detectionBox) { it is SlimeBlock || it is BedBlock || it is HoneyBlock }
+        return detectionBox.isBlockAtPosition { block ->
+            block is SlimeBlock || block is BedBlock || block is HoneyBlock
+        }
     }
 }

@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,21 +26,19 @@ import net.minecraft.client.util.Window
 import net.minecraft.client.world.ClientWorld
 
 
-val Window.size
+val Window.dimensions
     get() = Pair(width, height)
 
-val Window.sizeLong
-    get() = Pair(width.toLong(), height.toLong())
+val Window.scaledDimension
+    get() = Pair(scaledWidth, scaledHeight)
 
-object QuickAccess {
-    val mc: MinecraftClient
-        inline get() = net.ccbluex.liquidbounce.utils.client.mc
-    val player: ClientPlayerEntity
-        inline get() = mc.player!!
-    val world: ClientWorld
-        inline get() = mc.world!!
-    val network: ClientPlayNetworkHandler
-        inline get() = mc.networkHandler!!
-    val interaction: ClientPlayerInteractionManager
-        inline get() = mc.interactionManager!!
-}
+val mc: MinecraftClient
+    inline get() = MinecraftClient.getInstance()!!
+val player: ClientPlayerEntity
+    inline get() = mc.player!!
+val world: ClientWorld
+    inline get() = mc.world!!
+val network: ClientPlayNetworkHandler
+    inline get() = mc.networkHandler!!
+val interaction: ClientPlayerInteractionManager
+    inline get() = mc.interactionManager!!

@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,14 +16,15 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.render
 
 import net.ccbluex.liquidbounce.render.engine.Color4b
 import net.ccbluex.liquidbounce.render.engine.font.FontRendererBuffers
-import org.joml.Matrix4f
+import net.ccbluex.liquidbounce.render.engine.font.processor.TextProcessor
+import net.minecraft.text.Text
+import kotlin.random.Random
 
-abstract class AbstractFontRenderer {
+abstract class AbstractFontRenderer<T> {
     abstract val size: Float
     abstract val height: Float
 
@@ -41,14 +42,17 @@ abstract class AbstractFontRenderer {
      */
     @Suppress("LongParameterList")
     abstract fun draw(
-        text: String,
+        text: T,
         x0: Float,
         y0: Float,
-        defaultColor: Color4b = Color4b.WHITE,
         shadow: Boolean = false,
         z: Float = 0.0f,
         scale: Float = 1.0f
     ): Float
+
+    abstract fun process(text: String, defaultColor: Color4b = Color4b.WHITE): T
+    abstract fun process(text: Text, defaultColor: Color4b = Color4b.WHITE): T
+
 
     /**
      */
@@ -61,7 +65,13 @@ abstract class AbstractFontRenderer {
      * Approximates the width of a text. Accurate except for obfuscated (`§k`) formatting
      */
     abstract fun getStringWidth(
-        text: String,
+        text: TextProcessor.ProcessedText,
         shadow: Boolean = false
     ): Float
+
+    val TextProcessor.ProcessedText.width: Float
+        get() = getStringWidth(this, false)
+
+    val TextProcessor.ProcessedText.widthWithShadow: Float
+        get() = getStringWidth(this, true)
 }

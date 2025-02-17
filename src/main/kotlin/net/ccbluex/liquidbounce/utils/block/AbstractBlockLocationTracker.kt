@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,12 +16,11 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.utils.block
 
 import net.minecraft.block.BlockState
 import net.minecraft.util.math.BlockPos
-import java.util.Collections
+import java.util.concurrent.ConcurrentSkipListMap
 
 /**
  * Tracks locations of specific blocks in the world
@@ -30,32 +29,30 @@ import java.util.Collections
  */
 abstract class AbstractBlockLocationTracker<T> : ChunkScanner.BlockChangeSubscriber {
 
-    val trackedBlockMap: MutableMap<TargetBlockPos, T> = Collections.synchronizedMap(hashMapOf<TargetBlockPos, T>())
+    val trackedBlockMap = ConcurrentSkipListMap<BlockPos, T>()
 
-
+    /**
+     * Implementations of this method must be thread-safe
+     */
     abstract fun getStateFor(pos: BlockPos, state: BlockState): T?
 
     override fun recordBlock(pos: BlockPos, state: BlockState, cleared: Boolean) {
         val newState = this.getStateFor(pos, state)
-        val targetBlockPos = TargetBlockPos(pos)
 
         if (newState == null) {
             if (!cleared) {
-                this.trackedBlockMap.remove(targetBlockPos)
+                this.trackedBlockMap.remove(pos)
             }
 
             return
         }
 
+        val targetBlockPos = if (pos is BlockPos.Mutable) pos.toImmutable() else pos
         this.trackedBlockMap[targetBlockPos] = newState
     }
 
     override fun clearChunk(x: Int, z: Int) {
-        for (key in this.trackedBlockMap.keys) {
-            if (key.x shr 4 == x && key.z shr 4 == z) {
-                this.trackedBlockMap.remove(key)
-            }
-        }
+        this.trackedBlockMap.entries.removeIf { (key, _) -> key.x shr 4 == x && key.z shr 4 == z }
     }
 
     override fun clearAllChunks() {
@@ -64,9 +61,5 @@ abstract class AbstractBlockLocationTracker<T> : ChunkScanner.BlockChangeSubscri
 
     override fun chunkUpdate(x: Int, z: Int) {
         // Do nothing. Logic is already implemented in recordBlock
-    }
-
-    data class TargetBlockPos(val x: Int, val y: Int, val z: Int) {
-        constructor(pos: BlockPos) : this(pos.x, pos.y, pos.z)
     }
 }

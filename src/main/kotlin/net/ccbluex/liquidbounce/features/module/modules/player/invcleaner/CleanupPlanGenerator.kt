@@ -1,59 +1,80 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.player.invcleaner
 
-import net.ccbluex.liquidbounce.features.module.modules.player.invcleaner.items.WeightedItem
+import net.ccbluex.liquidbounce.features.module.modules.player.invcleaner.items.ItemFacet
+import net.ccbluex.liquidbounce.utils.inventory.ItemSlot
 import net.ccbluex.liquidbounce.utils.item.isNothing
-import net.minecraft.item.Item
-import net.minecraft.item.ItemStack
 
 class CleanupPlanGenerator(
     private val template: CleanupPlanPlacementTemplate,
-    private val availableItems: List<ItemSlot>
-) {
-    /**
-     * Items that have already been used. For example if already we used Inventory slot 12 as a sword, we cannot reuse
-     * it as an axe in slot 2.
-     */
-    private val alreadyAllocatedItems: HashSet<ItemSlot> = HashSet()
-
-    private val usefulItems: HashSet<ItemSlot> = HashSet()
+    private val availableItems: List<ItemSlot>,
+) : ItemPacker.ItemAmountContraintProvider {
     private val hotbarSwaps: ArrayList<InventorySwap> = ArrayList()
+
+    private val packer = ItemPacker()
+
+    private val currentLimit = HashMap<ItemNumberContraintGroup, Int>()
 
     // TODO Implement greedy check
     /**
      * Keeps track of where a specific type of item should be placed. e.g. BLOCK -> [Hotbar 7, Hotbar 8]
      */
-    private val categoryToSlotsMap: Map<ItemCategory, List<ItemSlot>>
-        = template.slotContentMap.entries
+    private val categoryToSlotsMap: Map<ItemCategory, List<ItemSlot>> =
+        template.slotContentMap.entries
             .filter { (_, itemType) -> itemType.category != null }
             .groupBy { (_, itemType) -> itemType.category!! }
             .mapValues { (_, entries) -> entries.map { (slot, _) -> slot } }
 
     fun generatePlan(): InventoryCleanupPlan {
+        val categorizer = ItemCategorization(availableItems)
+
         // Contains all facets that the available items represent. i.e. if we have an axe in slot 5, this would be
-        // (Axe(Slot 5), Sword(Slot 5)) since the axe can also function as a sword.
-        val itemFacets = availableItems.flatMap { ItemCategorization.getItemFacets(it).asIterable() }
+        // (Axe(Slot 5), Weapon(Slot 5)) since the axe can also function as a weapon.
+        val itemFacets = availableItems.flatMap { categorizer.getItemFacets(it).asIterable() }
 
         // i.e. BLOCK -> [Block(Slot 5), Block(Slot 6)]
-        val facetsGroupedByType = itemFacets.groupBy { it.category }
+        // Keep priority in mind (Tool slots are processed before weapon slots)
+        val facetsGroupedByType =
+            itemFacets
+                .groupBy { it.category }
+                .entries
+                .sortedByDescending { it.key.type.allocationPriority }
 
-        for ((category, availableItems) in facetsGroupedByType.entries) {
+        for ((category, availableItems) in facetsGroupedByType) {
             processItemCategory(category, availableItems)
         }
 
+        // We aren't allowed to touch those, so we just consider them as useful.
+        packer.usefulItems.addAll(this.template.forbiddenSlots)
+
         return InventoryCleanupPlan(
-            usefulItems = usefulItems,
+            usefulItems = packer.usefulItems,
             swaps = hotbarSwaps,
-            mergeableItems = groupItemsByType()
+            mergeableItems = groupItemsByType(),
         )
     }
 
-    private fun processItemCategory(category: ItemCategory, availableItems: List<WeightedItem>) {
-        val maxItemCount = if (category.type.allowOnlyOne) {
-            1
-        } else {
-            template.itemLimitPerCategory[category] ?: Int.MAX_VALUE
-        }
-
+    private fun processItemCategory(
+        category: ItemCategory,
+        availableItems: List<ItemFacet>,
+    ) {
         val hotbarSlotsToFill = this.categoryToSlotsMap[category]
 
         // We need to fill all hotbar slots with this item type.
@@ -61,68 +82,20 @@ class CleanupPlanGenerator(
         // Use a descending sort order so that we can fill the slots with the best items first.
         val prioritizedItemList = availableItems.sortedDescending()
 
-        markAndAllocateItems(
-            itemsToFillIn = prioritizedItemList,
-            hotbarSlotsToFill = hotbarSlotsToFill,
-            maxItemCount = maxItemCount,
-            requiredStackCount = hotbarSlotsToFill?.size ?: 0
-        )
+        // Decide where the items should go.
+        val requiredMoves =
+            this.packer.packItems(
+                itemsToFillIn = prioritizedItemList,
+                hotbarSlotsToFill = hotbarSlotsToFill,
+                contraintProvider = this,
+                forbiddenSlots = this.template.forbiddenSlots,
+                forbiddenSlotsToFill = this.template.forbiddenSlotsToFill
+            )
+
+        this.hotbarSwaps.addAll(requiredMoves)
     }
 
-    /**
-     * Takes items from the [itemsToFillIn] list until it collected [maxItemCount] items is and [requiredStackCount]
-     * stacks. The items are marked as useful and fills in hotbar slots if there are still slots to fill.
-     */
-    private fun markAndAllocateItems(
-        itemsToFillIn: List<WeightedItem>,
-        hotbarSlotsToFill: List<ItemSlot>?,
-        maxItemCount: Int,
-        requiredStackCount: Int
-    ) {
-        var currentStackCount = 0
-        var currentItemCount = 0
-
-        for (filledInItem in itemsToFillIn) {
-            val maxCountReached = currentItemCount >= maxItemCount
-            val allStacksFilled = currentStackCount >= requiredStackCount
-
-            if (maxCountReached && allStacksFilled) {
-                break
-            }
-
-            val filledInItemSlot = filledInItem.itemSlot
-
-            // The item is already allocated and marked as useful, so we cannot use it again.
-            if (filledInItemSlot in alreadyAllocatedItems) {
-                continue
-            }
-
-            usefulItems.add(filledInItemSlot)
-
-            // If we have a slot to fill...
-            if (hotbarSlotsToFill != null && currentStackCount < hotbarSlotsToFill.size) {
-                val hotbarSlotToFill = hotbarSlotsToFill[currentStackCount]
-
-                // We don't need to move around equivalent items
-                val areStacksSame = ItemStack.areEqual(
-                    filledInItemSlot.itemStack,
-                    hotbarSlotToFill.itemStack
-                )
-
-                if (filledInItemSlot != hotbarSlotToFill && !areStacksSame) {
-                    hotbarSwaps.add(InventorySwap(filledInItemSlot, hotbarSlotToFill))
-                }
-
-                alreadyAllocatedItems.add(filledInItemSlot)
-                alreadyAllocatedItems.add(hotbarSlotToFill)
-            }
-
-            currentItemCount += filledInItem.itemStack.count
-            currentStackCount++
-        }
-    }
-
-    fun groupItemsByType(): HashMap<ItemId, MutableList<ItemSlot>> {
+    private fun groupItemsByType(): HashMap<ItemId, MutableList<ItemSlot>> {
         val itemsByType = HashMap<ItemId, MutableList<ItemSlot>>()
 
         for (availableSlot in this.availableItems) {
@@ -135,13 +108,41 @@ class CleanupPlanGenerator(
                 continue
             }
 
-            val itemType = ItemId(stack.item, stack.nbt)
+            val itemType = ItemId(stack.item, stack.components)
             val stacksOfType = itemsByType.computeIfAbsent(itemType) { mutableListOf() }
 
             stacksOfType.add(availableSlot)
         }
 
         return itemsByType
+    }
+
+    override fun getSatisfactionStatus(item: ItemFacet): ItemPacker.ItemAmountContraintProvider.SatisfactionStatus {
+        val constraints = this.template.itemAmountConstraintProvider(item)
+
+        constraints.sortBy { it.group.priority }
+
+        for (constraintInfo in constraints) {
+            val currentCount = this.currentLimit[constraintInfo.group] ?: 0
+
+            if (currentCount > constraintInfo.group.acceptableRange.last) {
+                return ItemPacker.ItemAmountContraintProvider.SatisfactionStatus.OVERSATURATED
+            } else if (currentCount < constraintInfo.group.acceptableRange.first) {
+                return ItemPacker.ItemAmountContraintProvider.SatisfactionStatus.NOT_SATISFIED
+            }
+        }
+
+        return ItemPacker.ItemAmountContraintProvider.SatisfactionStatus.SATISFIED
+    }
+
+    override fun addItem(item: ItemFacet) {
+        val constraints = this.template.itemAmountConstraintProvider(item)
+
+        for (constraintInfo in constraints) {
+            val current = this.currentLimit.getOrDefault(constraintInfo.group, 0)
+
+            this.currentLimit[constraintInfo.group] = current + constraintInfo.amountAddedByItem
+        }
     }
 }
 
@@ -151,14 +152,16 @@ class CleanupPlanPlacementTemplate(
      */
     val slotContentMap: Map<ItemSlot, ItemSortChoice>,
     /**
-     * Contains an item limit for each category. e.g. BLOCK -> 128 will cause every stack above two to be thrown out.
-     * If an item is not in this map, there is no limit.
+     * A function which provides constraint groups for each item category and the number which the item counts against
+     * the given constraint. More info on how constraints work at [ItemNumberContraintGroup].
      */
-    val itemLimitPerCategory: Map<ItemCategory, Int>,
+    val itemAmountConstraintProvider: (ItemFacet) -> ArrayList<ItemConstraintInfo>,
     /**
      * If false, slots which also contains items of that category, those items are not replaced with other items.
      */
-    val isGreedy: Boolean
+    val isGreedy: Boolean,
+    val forbiddenSlots: Set<ItemSlot>,
+    val forbiddenSlotsToFill: Set<ItemSlot>
 )
 
 enum class ItemSlotType {

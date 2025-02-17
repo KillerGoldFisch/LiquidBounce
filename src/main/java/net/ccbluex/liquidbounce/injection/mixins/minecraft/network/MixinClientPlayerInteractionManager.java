@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,43 +18,47 @@
  */
 package net.ccbluex.liquidbounce.injection.mixins.minecraft.network;
 
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.ccbluex.liquidbounce.event.EventManager;
-import net.ccbluex.liquidbounce.event.events.AttackEvent;
-import net.ccbluex.liquidbounce.event.events.BlockBreakingProgressEvent;
-import net.ccbluex.liquidbounce.event.events.CancelBlockBreakingEvent;
-import net.ccbluex.liquidbounce.features.module.modules.combat.ModuleAutoBow;
+import net.ccbluex.liquidbounce.event.events.*;
 import net.ccbluex.liquidbounce.features.module.modules.combat.ModuleAutoClicker;
-import net.ccbluex.liquidbounce.features.module.modules.misc.ModuleClientFixes;
-import net.ccbluex.liquidbounce.features.module.modules.player.ModuleReach;
-import net.ccbluex.liquidbounce.utils.aiming.Rotation;
-import net.ccbluex.liquidbounce.utils.aiming.RotationManager;
+import net.ccbluex.liquidbounce.features.module.modules.combat.aimbot.ModuleAutoBow;
+import net.ccbluex.liquidbounce.features.module.modules.combat.crystalaura.trigger.triggers.ClientBlockBreakTrigger;
 import net.ccbluex.liquidbounce.utils.client.SilentHotbar;
-import net.minecraft.client.network.ClientPlayNetworkHandler;
 import net.minecraft.client.network.ClientPlayerInteractionManager;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.entity.player.PlayerInventory;
-import net.minecraft.network.packet.Packet;
+import net.minecraft.util.ActionResult;
+import net.minecraft.util.Hand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
+import net.minecraft.world.GameMode;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.ModifyArgs;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-import org.spongepowered.asm.mixin.injection.invoke.arg.Args;
 
 @Mixin(ClientPlayerInteractionManager.class)
-public class MixinClientPlayerInteractionManager {
+public abstract class MixinClientPlayerInteractionManager {
+
+    @Shadow
+    public abstract void attackEntity(PlayerEntity player, Entity target);
 
     /**
      * Hook attacking entity
      */
-    @Inject(method = "attackEntity", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/network/ClientPlayerInteractionManager;syncSelectedSlot()V", shift = At.Shift.AFTER))
+    @Inject(method = "attackEntity", at = @At("HEAD"), cancellable = true)
     private void hookAttack(PlayerEntity player, Entity target, CallbackInfo callbackInfo) {
-        EventManager.INSTANCE.callEvent(new AttackEvent(target));
+        var attackEvent = EventManager.INSTANCE.callEvent(new AttackEntityEvent(target, () -> {
+            attackEntity(player, target);
+            return null;
+        }));
+
+        if (attackEvent.isCancelled()) {
+            callbackInfo.cancel();
+        }
     }
 
     /**
@@ -79,63 +83,54 @@ public class MixinClientPlayerInteractionManager {
         }
     }
 
+    @Inject(method = "attackBlock", at = @At("HEAD"), cancellable = true)
+    private void hookAttackBlock(BlockPos pos, Direction direction, CallbackInfoReturnable<Boolean> cir) {
+        var attackEvent = new BlockAttackEvent(pos);
+        EventManager.INSTANCE.callEvent(attackEvent);
+        if (attackEvent.isCancelled()) {
+            cir.setReturnValue(false);
+        }
+    }
+
     /**
      * @author superblaubeere27
      */
-    @Redirect(method = "syncSelectedSlot", at = @At(value = "FIELD", target = "Lnet/minecraft/entity/player/PlayerInventory;selectedSlot:I"))
-    private int hookCustomSelectedSlot(PlayerInventory instance) {
+    @ModifyExpressionValue(method = "syncSelectedSlot", at = @At(value = "FIELD", target = "Lnet/minecraft/entity/player/PlayerInventory;selectedSlot:I"))
+    private int hookCustomSelectedSlot(int original) {
         return SilentHotbar.INSTANCE.getServersideSlot();
-    }
-
-    @Inject(method = "getReachDistance", at = @At("HEAD"), cancellable = true)
-    private void hookReachA(CallbackInfoReturnable<Float> cir) {
-        if (ModuleReach.INSTANCE.getEnabled()) {
-            cir.setReturnValue(ModuleReach.INSTANCE.getMaxReach());
-        }
-    }
-
-    @Inject(method = "hasExtendedReach", at = @At("HEAD"), cancellable = true)
-    private void hookReachB(CallbackInfoReturnable<Boolean> cir) {
-        if (ModuleReach.INSTANCE.getEnabled()) {
-            cir.setReturnValue(false);
-        }
     }
 
     @Inject(method = "hasLimitedAttackSpeed", at = @At("HEAD"), cancellable = true)
     private void injectAutoClicker(CallbackInfoReturnable<Boolean> cir) {
-        if (ModuleAutoClicker.INSTANCE.getEnabled() && ModuleAutoClicker.Left.INSTANCE.getEnabled()) {
+        if (ModuleAutoClicker.Left.INSTANCE.getRunning()) {
             cir.setReturnValue(false);
         }
     }
 
-    /**
-     * Hook rotation-type packet modification
-     * <p>
-     * Rotate according to modified rotation to avoid being detected by movement sensitive anti-cheats.
-     */
-    @ModifyArgs(method = "interactItem", at = @At(value = "INVOKE", target = "Lnet/minecraft/network/packet/c2s/play/PlayerMoveC2SPacket$Full;<init>(DDDFFZ)V"))
-    private void hookFixRotation(Args args) {
-        Rotation rotation = RotationManager.INSTANCE.getCurrentRotation();
-        if (rotation == null) {
-            return;
-        }
-
-        args.set(3, rotation.getYaw());
-        args.set(4, rotation.getPitch());
-    }
-
-    @Redirect(method = "interactItem", at = @At(value = "INVOKE", target =
-            "Lnet/minecraft/client/network/ClientPlayNetworkHandler;sendPacket(Lnet/minecraft/network/packet/Packet;)V"))
-    private void hookClientFixRemoveInteractItemMoveC2S(ClientPlayNetworkHandler instance, Packet<?> packet) {
-        if (ModuleClientFixes.INSTANCE.getEnabled() && ModuleClientFixes.INSTANCE.getFixInteractRotationUse()) {
-            return;
-        }
-
-        instance.sendPacket(packet);
+    @Inject(method = "interactItem", at = @At("RETURN"))
+    private void hookItemInteract(PlayerEntity player, Hand hand, CallbackInfoReturnable<ActionResult> cir) {
+        final PlayerInteractedItem cancelEvent = new PlayerInteractedItem(player, hand, cir.getReturnValue());
+        EventManager.INSTANCE.callEvent(cancelEvent);
     }
 
     @Inject(method = "stopUsingItem", at = @At("HEAD"))
     private void stopUsingItem(PlayerEntity player, CallbackInfo callbackInfo) {
         ModuleAutoBow.onStopUsingItem();
     }
+
+    @Inject(method = "setGameMode", at = @At("RETURN"))
+    private void setGameMode(GameMode gameMode, CallbackInfo callbackInfo) {
+        EventManager.INSTANCE.callEvent(new GameModeChangeEvent(gameMode));
+    }
+
+    @Inject(method = "setGameModes", at = @At("RETURN"))
+    private void setGameModes(GameMode gameMode, GameMode previousGameMode, CallbackInfo callbackInfo) {
+        EventManager.INSTANCE.callEvent(new GameModeChangeEvent(gameMode));
+    }
+
+    @Inject(method = "breakBlock", at = @At(value = "INVOKE", target = "Lnet/minecraft/block/Block;onBroken(Lnet/minecraft/world/WorldAccess;Lnet/minecraft/util/math/BlockPos;Lnet/minecraft/block/BlockState;)V", shift = At.Shift.AFTER))
+    private void hookBreakBlock(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
+        ClientBlockBreakTrigger.INSTANCE.clientBreakHandler();
+    }
+
 }

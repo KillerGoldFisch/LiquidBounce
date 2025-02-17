@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -15,19 +15,17 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
- *
  */
-
 package net.ccbluex.liquidbounce.features.module.modules.render
 
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap
 import net.ccbluex.liquidbounce.event.events.GameRenderEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.minecraft.entity.Entity
 import net.minecraft.entity.EntityType
 import net.minecraft.entity.mob.MobEntity
-import net.minecraft.util.math.BlockPos
 
 /**
  * Combine Mobs
@@ -39,9 +37,12 @@ import net.minecraft.util.math.BlockPos
  * The idea behind this module originates from the video
  * "2b2t's WAR Against Chicken Lag" https://www.youtube.com/watch?v=Qqmz76Z5az0
  */
-object ModuleCombineMobs : Module("CombineMobs", Category.RENDER) {
+object ModuleCombineMobs : ClientModule("CombineMobs", Category.RENDER) {
 
-    private val trackedEntitySinceRender = mutableMapOf<EntityType<*>, MutableList<BlockPos>>()
+    /**
+     * Key: type Value: position->count
+     */
+    private val trackedEntitySinceRender = hashMapOf<EntityType<*>, Long2IntOpenHashMap>()
 
     /**
      * As soon we disable the module, we want to clear the tracked entities
@@ -53,25 +54,25 @@ object ModuleCombineMobs : Module("CombineMobs", Category.RENDER) {
     /**
      * On each frame, we start with a clean slate
      */
+    @Suppress("unused")
     val renderGameHandler = handler<GameRenderEvent> {
         trackedEntitySinceRender.clear()
     }
 
     fun trackEntity(entity: Entity): Boolean {
-        val entityType = entity.type
-
         if (entity !is MobEntity) {
             return false
         }
 
-        val pos = entity.blockPos
+        val entityType = entity.type
 
-        val trackedEntities = trackedEntitySinceRender.getOrPut(entityType) { mutableListOf() }
-        val countOf = trackedEntities.count { it == pos }
-        trackedEntities += pos
-        trackedEntitySinceRender[entityType] = trackedEntities
+        val pos = entity.blockPos.asLong()
 
-        return countOf > 0
+        val trackedEntities = trackedEntitySinceRender.getOrPut(entityType, ::Long2IntOpenHashMap)
+        val count = trackedEntities.getOrDefault(pos, 0)
+        trackedEntities.put(pos, count + 1)
+
+        return count > 0
     }
 
 }

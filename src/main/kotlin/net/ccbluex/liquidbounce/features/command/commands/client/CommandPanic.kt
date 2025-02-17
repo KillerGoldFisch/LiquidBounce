@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,10 +16,13 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
+
 package net.ccbluex.liquidbounce.features.command.commands.client
 
+import net.ccbluex.liquidbounce.config.AutoConfig
 import net.ccbluex.liquidbounce.features.command.Command
 import net.ccbluex.liquidbounce.features.command.CommandException
+import net.ccbluex.liquidbounce.features.command.CommandFactory
 import net.ccbluex.liquidbounce.features.command.builder.CommandBuilder
 import net.ccbluex.liquidbounce.features.command.builder.ParameterBuilder
 import net.ccbluex.liquidbounce.features.module.Category
@@ -28,9 +31,14 @@ import net.ccbluex.liquidbounce.utils.client.chat
 import net.ccbluex.liquidbounce.utils.client.regular
 import net.minecraft.text.MutableText
 
-object CommandPanic {
+/**
+ * Panic Command
+ *
+ * Allows you to disable all modules or modules in a specific category.
+ */
+object CommandPanic : CommandFactory {
 
-    fun createCommand(): Command {
+    override fun createCommand(): Command {
         return CommandBuilder
             .begin("panic")
             .parameter(
@@ -41,26 +49,35 @@ object CommandPanic {
                     .build()
             )
             .handler { command, args ->
-                var modules = ModuleManager.filter { it.enabled }
+                var modules = ModuleManager.filter { it.running }
                 val msg: MutableText
 
-                when (val type = args[0] as String? ?: "nonrender") {
+                when (val type = args.getOrNull(0) as String? ?: "nonrender") {
                     "all" -> msg = command.result("disabledAllModules")
                     "nonrender" -> {
-                        modules = modules.filter { it.category != Category.RENDER }
+                        modules = modules.filter { it.category != Category.RENDER && it.category != Category.CLIENT }
                         msg = command.result("disabledAllCategoryModules", command.result("nonRender"))
                     }
 
                     else -> {
-                        val category = Category.values().find { it.readableName.equals(type, true) }
+                        val category = Category.fromReadableName(type)
                             ?: throw CommandException(command.result("categoryNotFound", type))
                         modules = modules.filter { it.category == category }
                         msg = command.result("disabledAllCategoryModules", category.readableName)
                     }
                 }
 
-                modules.forEach { it.enabled = false }
-                chat(regular(msg))
+                runCatching {
+                    AutoConfig.withLoading {
+                        for (module in modules) {
+                            module.enabled = false
+                        }
+                    }
+                }.onSuccess {
+                    chat(regular(msg), command)
+                }.onFailure {
+                    throw CommandException(command.result("panicFailed"))
+                }
             }
             .build()
     }

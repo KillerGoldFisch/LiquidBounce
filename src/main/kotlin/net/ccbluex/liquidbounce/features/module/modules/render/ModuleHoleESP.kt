@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,21 +18,24 @@
  */
 package net.ccbluex.liquidbounce.features.module.modules.render
 
-import net.ccbluex.liquidbounce.config.Choice
-import net.ccbluex.liquidbounce.config.ChoiceConfigurable
-import net.ccbluex.liquidbounce.event.events.PlayerTickEvent
+import net.ccbluex.liquidbounce.config.types.Choice
+import net.ccbluex.liquidbounce.config.types.ChoiceConfigurable
 import net.ccbluex.liquidbounce.event.events.WorldRenderEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.ccbluex.liquidbounce.render.*
 import net.ccbluex.liquidbounce.render.engine.Color4b
-import net.ccbluex.liquidbounce.render.engine.Vec3
-import net.ccbluex.liquidbounce.utils.block.MovableRegionScanner
-import net.ccbluex.liquidbounce.utils.block.Region
-import net.ccbluex.liquidbounce.utils.block.WorldChangeNotifier
-import net.minecraft.block.Blocks
-import net.minecraft.util.math.*
+import net.ccbluex.liquidbounce.utils.block.Region.Companion.getBox
+import net.ccbluex.liquidbounce.utils.block.hole.Hole
+import net.ccbluex.liquidbounce.utils.block.hole.HoleManager
+import net.ccbluex.liquidbounce.utils.block.hole.HoleManagerSubscriber
+import net.ccbluex.liquidbounce.utils.block.hole.HoleTracker
+import net.ccbluex.liquidbounce.utils.math.toVec3d
+import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.Direction
+import net.minecraft.util.math.Vec3d
+import kotlin.math.abs
 import kotlin.math.max
 
 /**
@@ -40,47 +43,65 @@ import kotlin.math.max
  *
  * Detects and displays safe spots for Crystal PvP.
  */
-
-object ModuleHoleESP : Module("HoleESP", Category.RENDER) {
+object ModuleHoleESP : ClientModule("HoleESP", Category.RENDER), HoleManagerSubscriber {
 
     private val modes = choices("Mode", GlowingPlane, arrayOf(BoxChoice, GlowingPlane))
 
-    var horizontalDistance by int("HorizontalScanDistance", 16, 4..100)
-    var verticalDistance by int("VerticalScanDistance", 16, 4..100)
+    private val horizontalDistance by int("HorizontalScanDistance", 32, 4..128)
+    private val verticalDistance by int("VerticalScanDistance", 8, 4..128)
 
-    val flattenMovement by boolean("FlattenMovement", true)
+    private val distanceFade by float("DistanceFade", 0.3f, 0f..1f)
 
-    val holes = HashMap<BlockPos, HoleQuality>()
-    val movableRegionScanner = MovableRegionScanner()
+    private val colorBedrock by color("1x1Bedrock", Color4b(0x19c15c))
+    private val color1by1 by color("1x1", Color4b(0xf7381b))
+    private val color1by2 by color("1x2", Color4b(0x35bacc))
+    private val color2by2 by color("2x2", Color4b(0xf7cf1b))
 
-    val distanceFade by float("DistanceFade", 0.3f, 0f..1f)
+    override fun horizontalDistance(): Int = horizontalDistance
+    override fun verticalDistance(): Int = verticalDistance
+
+    override fun enable() {
+        HoleManager.subscribe(this)
+    }
+
+    override fun disable() {
+        HoleManager.unsubscribe(this)
+    }
 
     private object BoxChoice : Choice("Box") {
 
-        override val parent: ChoiceConfigurable
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
         private val outline by boolean("Outline", true)
 
-        private val box = Box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-
+        @Suppress("unused")
         val renderHandler = handler<WorldRenderEvent> { event ->
-            val matrixStack = event.matrixStack
-            val markedBlocks = holes.entries
+            val pos = player.blockPos
+            val vDistance = verticalDistance
+            val hDistance = horizontalDistance
 
-            renderEnvironmentForWorld(matrixStack) {
-                for ((pos, quality) in markedBlocks) {
-                    val vec3 = Vec3(pos)
-                    val fade = calculateFade(pos)
-                    val baseColor =  applyFade(quality.baseColor, fade)
-                    val outlineColor = applyFade(quality.outlineColor, fade)
+            renderEnvironmentForWorld(event.matrixStack) {
+                HoleTracker.holes.forEach {
+                    val positions = it.positions
 
-                    withPosition(vec3) {
+                    val valOutOfRange = abs(pos.y - positions.from.y) > vDistance
+                    val xzOutOfRange = abs(pos.x - positions.from.x) > hDistance ||
+                        abs(pos.z - positions.from.z) > hDistance
+                    if (valOutOfRange || xzOutOfRange) {
+                        return@forEach
+                    }
+
+                    val fade = calculateFade(positions.from)
+                    val baseColor = it.color().with(a = 50).fade(fade)
+                    val box = positions.getBox()
+                    withPositionRelativeToCamera(positions.from.toVec3d()) {
                         withColor(baseColor) {
                             drawSolidBox(box)
                         }
 
                         if (outline) {
+                            val outlineColor = it.color().with(a = 100).fade(fade)
                             withColor(outlineColor) {
                                 drawOutlinedBox(box)
                             }
@@ -89,121 +110,71 @@ object ModuleHoleESP : Module("HoleESP", Category.RENDER) {
                 }
             }
         }
-
     }
 
-    private object GlowingPlane: Choice("GlowingPlane") {
-        override val parent: ChoiceConfigurable
+    private object GlowingPlane : Choice("GlowingPlane") {
+
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
-        val outline by boolean("Outline", true)
+        private val outline by boolean("Outline", true)
 
-        val glowHeightSetting by float("GlowHeight", 0.7f, 0f..1f)
+        private val glowHeightSetting by float("GlowHeight", 0.7f, 0f..1f)
 
-
-
-        private val box = Box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-
-
+        @Suppress("unused")
         val renderHandler = handler<WorldRenderEvent> { event ->
-            val matrixStack = event.matrixStack
-            val markedBlocks = holes.entries
-
             val glowHeight = glowHeightSetting.toDouble()
-            renderEnvironmentForWorld(matrixStack) {
+            val pos = player.blockPos
+            val vDistance = verticalDistance
+            val hDistance = horizontalDistance
+
+            renderEnvironmentForWorld(event.matrixStack) {
                 withDisabledCull {
-                    for ((pos, quality) in markedBlocks) {
-                        val vec3 = Vec3(pos)
-                        val fade = calculateFade(pos)
+                    HoleTracker.holes.forEach {
+                        val positions = it.positions
 
-                        val baseColor = applyFade(quality.baseColor, fade)
-                        val transparentColor = baseColor.alpha(0)
-                        val outlineColor = applyFade(quality.outlineColor, fade)
+                        val valOutOfRange = abs(pos.y - positions.from.y) > vDistance
+                        val xzOutOfRange = abs(pos.x - positions.from.x) > hDistance ||
+                            abs(pos.z - positions.from.z) > hDistance
+                        if (valOutOfRange || xzOutOfRange) {
+                            return@forEach
+                        }
 
-                        withPosition(vec3) {
+                        val fade = calculateFade(positions.from)
+                        val baseColor = it.color().with(a = 50).fade(fade)
+                        val transparentColor = baseColor.with(a = 0)
+                        val box = positions.getBox()
+                        withPositionRelativeToCamera(positions.from.toVec3d()) {
                             withColor(baseColor) {
                                 drawSideBox(box, Direction.DOWN)
                             }
-                            if(outline) {
+
+                            if (outline) {
+                                val outlineColor = it.color().with(a = 100).fade(fade)
                                 withColor(outlineColor) {
                                     drawSideBox(box, Direction.DOWN, onlyOutline = true)
-
                                 }
                             }
-                            drawGradientSides(this, glowHeight, baseColor, transparentColor, box)
-                        }
 
+                            drawGradientSides(glowHeight, baseColor, transparentColor, box)
+                        }
                     }
                 }
             }
         }
     }
 
-    private fun drawGradientSides(
-        renderEnvironment: RenderEnvironment,
-        height: Double,
-        baseColor: Color4b,
-        topColor: Color4b,
-        box: Box) {
-
-        if(height == 0.0)
-            return
-
-        val vertexColors =
-            listOf(
-                baseColor,
-                topColor,
-                topColor,
-                baseColor
-            )
-
-        with (renderEnvironment) {
-            drawGradientQuad(
-                listOf(
-                    Vec3(box.minX, 0.0, box.minZ),
-                    Vec3(box.minX, height, box.minZ),
-                    Vec3(box.maxX, height, box.minZ),
-                    Vec3(box.maxX, 0.0, box.minZ),
-                ),
-                vertexColors
-            )
-            drawGradientQuad(
-                listOf(
-                    Vec3(box.maxX, 0.0, box.minZ),
-                    Vec3(box.maxX, height, box.minZ),
-                    Vec3(box.maxX, height, box.maxZ),
-                    Vec3(box.maxX, 0.0, box.maxZ),
-                ),
-                vertexColors
-            )
-            drawGradientQuad(
-                listOf(
-                    Vec3(box.maxX, 0.0, box.maxZ),
-                    Vec3(box.maxX, height, box.maxZ),
-                    Vec3(box.minX, height, box.maxZ),
-                    Vec3(box.minX, 0.0, box.maxZ),
-                ),
-                vertexColors
-            )
-            drawGradientQuad(
-                listOf(
-                    Vec3(box.minX, 0.0, box.maxZ),
-                    Vec3(box.minX, height, box.maxZ),
-                    Vec3(box.minX, height, box.minZ),
-                    Vec3(box.minX, 0.0, box.minZ),
-                ),
-                vertexColors
-            )
-        }
-    }
-
-    val movementHandler = handler<PlayerTickEvent> { event ->
-        this.updateScanRegion()
+    private fun Hole.color() = when {
+        type == Hole.Type.ONE_ONE && bedrockOnly -> colorBedrock
+        type == Hole.Type.ONE_TWO -> color1by2
+        type == Hole.Type.TWO_TWO -> color2by2
+        else -> color1by1
     }
 
     private fun calculateFade(pos: BlockPos): Float {
-        if (distanceFade == 0f)
+        if (distanceFade == 0f) {
             return 1f
+        }
 
         val verticalDistanceFraction = (player.pos.y - pos.y) / verticalDistance
         val horizontalDistanceFraction =
@@ -212,155 +183,6 @@ object ModuleHoleESP : Module("HoleESP", Category.RENDER) {
         val fade = (1 - max(verticalDistanceFraction, horizontalDistanceFraction)) / distanceFade
 
         return fade.coerceIn(0.0, 1.0).toFloat()
-    }
-
-    private fun applyFade(baseColor: Color4b, fade: Float) =
-        if(fade == 1f)
-            baseColor
-        else
-            baseColor.alpha((baseColor.a * fade).toInt())
-
-
-    private fun flatten(pos: BlockPos): BlockPos {
-        if (!this.flattenMovement) {
-            return pos
-        }
-
-        val flattenXZ = this.horizontalDistance < 8
-        val flattenY = this.verticalDistance < 5
-
-        val maskXZ = if (flattenXZ) 3.inv() else 0.inv()
-        val maskY = if (flattenY) 3.inv() else 0.inv()
-
-        return BlockPos(pos.x and maskXZ, pos.y and maskY, pos.z and maskXZ)
-    }
-
-    private fun updateScanRegion() {
-        synchronized(this.holes) {
-            val changedAreas = this.movableRegionScanner.moveRegion(
-                Region.quadAround(
-                    player.blockPos,
-                    this.horizontalDistance,
-                    this.verticalDistance
-                )
-            )
-
-            val region = this.movableRegionScanner.currentRegion
-
-            // Remove blocks out of the area
-            holes.entries.removeIf { it.key !in region }
-
-            changedAreas?.forEach(this::updateRegion)
-        }
-    }
-
-    private fun updateRegion(region: Region) {
-        val world = world
-
-        region.forEachCoordinate { x, y, z ->
-            val pos = BlockPos(x, y, z)
-            val blockState = world.getBlockState(pos)
-
-            if (!blockState.isAir && blockState.getCollisionShape(world, pos).boundingBoxes.any { it.maxY >= 1 }) {
-                return@forEachCoordinate
-            }
-
-            // Can you actually go inside that hole?
-            if (arrayOf(pos.up(1), pos.up(2)).any { !world.getBlockState(it).getCollisionShape(world, it).isEmpty }) {
-                return@forEachCoordinate
-            }
-
-            val positionsToScan = arrayOf(
-                BlockPos(x + 1, y, z),
-                BlockPos(x - 1, y, z),
-                BlockPos(x, y, z + 1),
-                BlockPos(x, y, z - 1),
-                BlockPos(x, y - 1, z)
-            )
-
-            var unsafeBlocks = 0
-
-            for (scanPos in positionsToScan) {
-                val scanState = world.getBlockState(scanPos)
-
-                val isUnsafe = when (scanState.block) {
-                    Blocks.BEDROCK -> false
-                    Blocks.OBSIDIAN -> true
-                    else -> return@forEachCoordinate
-                }
-
-                unsafeBlocks += if (isUnsafe) 1 else 0
-            }
-
-            val holeQuality = when (unsafeBlocks) {
-                0 -> HoleQuality.SAFE
-                in 1..4 -> HoleQuality.MEDIOCRE
-                else -> HoleQuality.UNSAFE
-            }
-
-            this.holes[pos] = holeQuality
-        }
-    }
-
-    override fun enable() {
-        WorldChangeNotifier.subscribe(InvalidationHook)
-
-        this.movableRegionScanner.clearRegion()
-
-        updateScanRegion()
-
-    }
-
-    override fun disable() {
-        WorldChangeNotifier.unsubscribe(InvalidationHook)
-        holes.clear()
-    }
-
-
-
-
-    object InvalidationHook : WorldChangeNotifier.WorldChangeSubscriber {
-        override fun invalidate(region: Region, rescan: Boolean) {
-            // Check if the region intersects. Otherwise, calling region.intersection would be unsafe
-            if (!region.intersects(movableRegionScanner.currentRegion)) {
-                return
-            }
-
-
-            val intersection = region.intersection(movableRegionScanner.currentRegion)
-
-            val rescanRegion = Region(
-                intersection.from.subtract(Vec3i(1, 1, 1)),
-                intersection.to.add(Vec3i(1, 1, 1))
-            )
-
-            synchronized(holes) {
-                holes.entries.removeIf { it.key in rescanRegion }
-
-                if (rescan) {
-                    updateRegion(rescanRegion)
-                }
-            }
-        }
-
-        override fun invalidateEverything() {
-            synchronized(movableRegionScanner) {
-                movableRegionScanner.clearRegion()
-            }
-            synchronized(holes) {
-                holes.clear()
-            }
-        }
-
-    }
-
-    enum class HoleQuality(r: Int, g: Int, b: Int) {
-        SAFE(0x20, 0xC2, 0x06),
-        MEDIOCRE(0xD5, 0x96, 0x00),
-        UNSAFE(0xD7, 0x09, 0x09);
-
-        val baseColor: Color4b = Color4b(r, g, b, 50)
-        val outlineColor: Color4b = Color4b(r, g, b, 100)
     }
 
 }

@@ -2,7 +2,7 @@
  *
  *  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *  *
- *  * Copyright (c) 2015 - 2023 CCBlueX
+ *  * Copyright (c) 2015 - 2025 CCBlueX
  *  *
  *  * LiquidBounce is free software: you can redistribute it and/or modify
  *  * it under the terms of the GNU General Public License as published by
@@ -21,12 +21,16 @@
 
 package net.ccbluex.liquidbounce.injection.mixins.minecraft.gui.custom;
 
-import net.ccbluex.liquidbounce.api.IpInfoApi;
-import net.ccbluex.liquidbounce.features.misc.ProxyManager;
+import net.ccbluex.liquidbounce.api.thirdparty.IpInfoApi;
+import net.ccbluex.liquidbounce.event.EventManager;
+import net.ccbluex.liquidbounce.event.events.ServerConnectEvent;
+import net.ccbluex.liquidbounce.features.misc.HideAppearance;
+import net.ccbluex.liquidbounce.features.misc.proxy.ProxyManager;
 import net.ccbluex.liquidbounce.injection.mixins.minecraft.gui.MixinScreen;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.screen.ConnectScreen;
+import net.minecraft.client.gui.screen.multiplayer.ConnectScreen;
+import net.minecraft.client.network.CookieStorage;
 import net.minecraft.client.network.ServerAddress;
 import net.minecraft.client.network.ServerInfo;
 import net.minecraft.network.ClientConnection;
@@ -42,14 +46,18 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
+import java.net.InetSocketAddress;
+
+import static net.ccbluex.liquidbounce.utils.client.TextExtensionsKt.hideSensitiveAddress;
+
 @Mixin(ConnectScreen.class)
 public abstract class MixinConnectScreen extends MixinScreen {
 
     @Shadow
-    private Text status;
+    volatile @Nullable ClientConnection connection;
 
     @Shadow
-    private volatile @Nullable ClientConnection connection;
+    public abstract void connect(MinecraftClient client, ServerAddress address, ServerInfo info, @Nullable CookieStorage cookieStorage);
 
     @Unique
     private ServerAddress serverAddress = null;
@@ -70,46 +78,59 @@ public abstract class MixinConnectScreen extends MixinScreen {
         var clientConnection = this.connection;
         var serverAddress = this.serverAddress;
         
-        if (clientConnection == null || this.serverAddress == null) {
+        if (clientConnection == null || this.serverAddress == null || HideAppearance.INSTANCE.isHidingNow()) {
             return;
         }
 
         var connectionDetails = getConnectionDetails(clientConnection, serverAddress);
         context.drawCenteredTextWithShadow(this.textRenderer, connectionDetails, this.width / 2,
-                this.height / 2 - 50, 0xFFFFFF);
+                this.height / 2 - 60, 0xFFFFFF);
     }
 
 
-    @Inject(method = "connect(Lnet/minecraft/client/MinecraftClient;Lnet/minecraft/client/network/ServerAddress;Lnet/minecraft/client/network/ServerInfo;)V", at = @At("HEAD"))
-    private void injectConnect(final MinecraftClient client, final ServerAddress address, @Nullable final ServerInfo info, final CallbackInfo callback) {
+    @Inject(method = "connect(Lnet/minecraft/client/MinecraftClient;Lnet/minecraft/client/network/ServerAddress;Lnet/minecraft/client/network/ServerInfo;Lnet/minecraft/client/network/CookieStorage;)V", at = @At("HEAD"), cancellable = true)
+    private void injectConnect(MinecraftClient client, ServerAddress address, ServerInfo info, CookieStorage cookieStorage, CallbackInfo ci) {
         this.serverAddress = address;
+        var event = EventManager.INSTANCE.callEvent(new ServerConnectEvent((ConnectScreen) (Object) this, address, info, cookieStorage));
+
+        if (event.isCancelled()) {
+            ci.cancel();
+        }
     }
 
     @ModifyConstant(method = "render", constant = @Constant(intValue = 50))
     private int modifyStatusY(int original) {
-        return original + 20;
+        return original + 30;
     }
 
     @Unique
     private Text getConnectionDetails(ClientConnection clientConnection, ServerAddress serverAddress) {
-        // This will either be the proxy address or the server address
-        var proxyAddr = clientConnection.getAddress();
-        var serverAddr = String.format("%s:%s", serverAddress.getAddress(), serverAddress.getPort());
-        var ipInfo = IpInfoApi.INSTANCE.getLocalIpInfo();
+        // This will either be the socket address or the server address
+        var socketAddr = getSocketAddress(clientConnection, serverAddress);
+        var serverAddr = String.format(
+                "%s:%s",
+                hideSensitiveAddress(serverAddress.getAddress()),
+                serverAddress.getPort()
+        );
+        var ipInfo = IpInfoApi.INSTANCE.getCurrent();
 
         var client = Text.literal("Client").formatted(Formatting.BLUE);
         if (ipInfo != null) {
-            client.append(Text.literal(" (").formatted(Formatting.DARK_GRAY));
-            client.append(Text.literal(ipInfo.getCountry()).formatted(Formatting.BLUE));
-            client.append(Text.literal(")").formatted(Formatting.DARK_GRAY));
+            var country = ipInfo.getCountry();
+
+            if (country != null) {
+                client.append(Text.literal(" (").formatted(Formatting.DARK_GRAY));
+                client.append(Text.literal(country).formatted(Formatting.BLUE));
+                client.append(Text.literal(")").formatted(Formatting.DARK_GRAY));
+            }
         }
         var spacer = Text.literal(" ⟺ ").formatted(Formatting.DARK_GRAY);
 
-        var proxy = Text.literal(proxyAddr == null ? "(Unknown)" : proxyAddr.toString());
+        var socket = Text.literal(socketAddr);
         if (ProxyManager.INSTANCE.getCurrentProxy() != null) {
-            proxy.formatted(Formatting.GOLD); // Proxy good
+            socket.formatted(Formatting.GOLD); // Proxy good
         } else {
-            proxy.formatted(Formatting.RED); // No proxy - shows server address
+            socket.formatted(Formatting.RED); // No proxy - shows server address
         }
 
         var server = Text.literal(serverAddr).formatted(Formatting.GREEN);
@@ -117,9 +138,30 @@ public abstract class MixinConnectScreen extends MixinScreen {
         return Text.empty()
                 .append(client)
                 .append(spacer.copy())
-                .append(proxy)
+                .append(socket)
                 .append(spacer.copy())
                 .append(server);
+    }
+
+    @Unique
+    private static String getSocketAddress(ClientConnection clientConnection, ServerAddress serverAddress) {
+        String socketAddr;
+        if (clientConnection.getAddress() instanceof InetSocketAddress address) {
+            // In this we do not redact the host string - it is usually not sensitive
+            var hostString = address.getHostString();
+            var hostAddress = address.isUnresolved() ?
+                    "<unresolved>" :
+                    address.getAddress().getHostAddress();
+
+            if (hostString.equals(serverAddress.getAddress())) {
+                socketAddr = String.format("%s:%s", hostAddress, address.getPort());
+            } else {
+                socketAddr = String.format("%s/%s:%s", hostString, hostAddress, address.getPort());
+            }
+        } else {
+            socketAddr = "<unknown>";
+        }
+        return socketAddr;
     }
 
 }

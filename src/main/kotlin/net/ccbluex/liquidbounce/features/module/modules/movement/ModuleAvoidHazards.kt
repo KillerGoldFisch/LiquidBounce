@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,10 +21,10 @@ package net.ccbluex.liquidbounce.features.module.modules.movement
 import net.ccbluex.liquidbounce.event.events.BlockShapeEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.ccbluex.liquidbounce.utils.block.getBlock
 import net.minecraft.block.*
-import net.minecraft.util.math.Direction
+import net.minecraft.fluid.Fluids
 import net.minecraft.util.shape.VoxelShapes
 
 /**
@@ -32,34 +32,41 @@ import net.minecraft.util.shape.VoxelShapes
  *
  * Prevents you walking into blocks that might be malicious for you.
  */
-object ModuleAvoidHazards : Module("AvoidHazards", Category.MOVEMENT) {
+object ModuleAvoidHazards : ClientModule("AvoidHazards", Category.MOVEMENT) {
 
-    val cacti by boolean("Cacti", true)
-    val berryBush by boolean("BerryBush", true)
-    val pressurePlates by boolean("PressurePlates", true)
-    val fire by boolean("Fire", true)
-    val magmaBlocks by boolean("MagmaBlocks", true)
+    private val cacti by boolean("Cacti", true)
+    private val berryBush by boolean("BerryBush", true)
+    private val pressurePlates by boolean("PressurePlates", true)
+    private val fire by boolean("Fire", true)
+    private val lava by boolean("Lava", true)
+    private val magmaBlocks by boolean("MagmaBlocks", true)
+
+    // Conflicts with AvoidHazards
     val cobWebs by boolean("Cobwebs", true)
 
+    val UNSAFE_BLOCK_CAP = Block.createCuboidShape(
+        0.0,
+        0.0,
+        0.0,
+        16.0,
+        4.0,
+        16.0
+    )
+
+    @Suppress("unused")
     val shapeHandler = handler<BlockShapeEvent> { event ->
-        if (cacti && event.state.block is CactusBlock) {
-            event.shape = VoxelShapes.fullCube()
-        } else if (berryBush && event.state.block is SweetBerryBushBlock) {
-            event.shape = VoxelShapes.fullCube()
-        } else if (fire && event.state.block is FireBlock) {
-            event.shape = VoxelShapes.fullCube()
-        } else if (cobWebs && event.state.block is CobwebBlock) {
-            event.shape = VoxelShapes.fullCube()
-        } else if (pressurePlates && event.state.block is AbstractPressurePlateBlock) {
-            event.shape = Block.createCuboidShape(0.0, 0.0, 0.0, 16.0, 4.0, 16.0)
-        } else if (magmaBlocks && event.pos.down().getBlock() is MagmaBlock && !event.state.isSideSolid(
-                world,
-                event.pos,
-                Direction.UP,
-                SideShapeType.CENTER
-            )
-        ) {
-            event.shape = Block.createCuboidShape(0.0, 0.0, 0.0, 16.0, 4.0, 16.0)
+        val block = event.state.block
+        val fluidState = event.state.fluidState
+
+        event.shape = when {
+            block is CactusBlock && cacti -> VoxelShapes.fullCube()
+            block is SweetBerryBushBlock && berryBush -> VoxelShapes.fullCube()
+            block is FireBlock && fire -> VoxelShapes.fullCube()
+            block is CobwebBlock && cobWebs -> VoxelShapes.fullCube()
+            block is AbstractPressurePlateBlock && pressurePlates -> UNSAFE_BLOCK_CAP
+            event.pos.down().getBlock() is MagmaBlock && magmaBlocks -> UNSAFE_BLOCK_CAP
+            (fluidState.isOf(Fluids.LAVA) || fluidState.isOf(Fluids.FLOWING_LAVA)) && lava -> VoxelShapes.fullCube()
+            else -> return@handler
         }
     }
 

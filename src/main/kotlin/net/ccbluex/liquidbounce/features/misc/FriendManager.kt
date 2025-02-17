@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,19 +16,28 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.features.misc
 
 import net.ccbluex.liquidbounce.config.ConfigSystem
-import net.ccbluex.liquidbounce.config.Configurable
-import net.ccbluex.liquidbounce.config.ListValueType
+import net.ccbluex.liquidbounce.config.types.Configurable
+import net.ccbluex.liquidbounce.config.types.ListValueType
+import net.ccbluex.liquidbounce.event.EventListener
+import net.ccbluex.liquidbounce.event.events.TagEntityEvent
+import net.ccbluex.liquidbounce.event.handler
 import net.minecraft.entity.Entity
 import net.minecraft.entity.player.PlayerEntity
 import java.util.*
 
-object FriendManager : Configurable("Friends") {
+object FriendManager : Configurable("Friends"), EventListener {
 
     val friends by value(name, TreeSet<Friend>(), listType = ListValueType.Friend)
+
+    @Suppress("unused")
+    private val tagEntityEvent = handler<TagEntityEvent> {
+        if (isFriend(it.entity)) {
+            it.assumeFriend()
+        }
+    }
 
     init {
         ConfigSystem.root(this)
@@ -42,9 +51,7 @@ object FriendManager : Configurable("Friends") {
 
             other as Friend
 
-            if (name != other.name) return false
-
-            return true
+            return name == other.name
         }
 
         override fun hashCode(): Int {
@@ -52,6 +59,8 @@ object FriendManager : Configurable("Friends") {
         }
 
         override fun compareTo(other: Friend): Int = this.name.compareTo(other.name)
+
+        fun getDefaultName(id: Int): String = "Friend $id"
 
     }
 

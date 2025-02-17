@@ -1,12 +1,31 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.player.invcleaner
 
+import net.ccbluex.liquidbounce.utils.inventory.ItemSlot
+import net.ccbluex.liquidbounce.utils.kotlin.Priority
+import net.minecraft.component.ComponentMap
 import net.minecraft.item.Item
-import net.minecraft.nbt.NbtCompound
-import net.minecraft.nbt.NbtElement
 
-class InventorySwap(val from: ItemSlot, val to: ItemSlot)
+data class InventorySwap(val from: ItemSlot, val to: ItemSlot, val priority: Priority)
 
-data class ItemId(val item: Item, val nbt: NbtCompound?)
+data class ItemId(val item: Item, val nbt: ComponentMap)
 
 class InventoryCleanupPlan(
     val usefulItems: MutableSet<ItemSlot>,
@@ -34,11 +53,10 @@ class InventoryCleanupPlan(
         this.usefulItems.addAll(usefulItemsToAdd)
 
         this.swaps.forEachIndexed { index, hotbarSwap ->
-            val newSwap =
-                InventorySwap(
-                    slotMap[hotbarSwap.from] ?: hotbarSwap.from,
-                    slotMap[hotbarSwap.to] ?: hotbarSwap.to,
-                )
+            val newSwap = hotbarSwap.copy(
+                from = slotMap[hotbarSwap.from] ?: hotbarSwap.from,
+                to = slotMap[hotbarSwap.to] ?: hotbarSwap.to
+            )
 
             this.swaps[index] = newSwap
         }

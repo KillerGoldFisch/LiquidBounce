@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,24 +19,26 @@
 
 package net.ccbluex.liquidbounce.injection.mixins.minecraft.gui;
 
-import net.ccbluex.liquidbounce.base.ultralight.RenderLayer;
-import net.ccbluex.liquidbounce.base.ultralight.UltralightEngine;
-import net.ccbluex.liquidbounce.base.ultralight.ViewOverlay;
-import net.ccbluex.liquidbounce.base.ultralight.theme.Page;
-import net.ccbluex.liquidbounce.base.ultralight.theme.ThemeManager;
+import com.llamalad7.mixinextras.injector.v2.WrapWithCondition;
+import net.ccbluex.liquidbounce.event.EventManager;
+import net.ccbluex.liquidbounce.event.events.ScreenRenderEvent;
+import net.ccbluex.liquidbounce.event.events.SplashOverlayEvent;
+import net.ccbluex.liquidbounce.event.events.SplashProgressEvent;
+import net.ccbluex.liquidbounce.features.misc.HideAppearance;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.screen.SplashOverlay;
+import net.minecraft.client.render.RenderLayer;
 import net.minecraft.resource.ResourceReload;
-import org.spongepowered.asm.mixin.Final;
-import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Shadow;
+import net.minecraft.util.Identifier;
+import net.minecraft.util.math.ColorHelper;
+import org.spongepowered.asm.mixin.*;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-import java.util.Optional;
-import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.IntSupplier;
 
 /**
  * Custom ultralight splash screen
@@ -46,51 +48,74 @@ public class MixinSplashOverlay {
 
     @Shadow
     @Final
-    private MinecraftClient client;
-    @Shadow
-    @Final
     private ResourceReload reload;
+
+    @Mutable
     @Shadow
     @Final
-    private Consumer<Optional<Throwable>> exceptionHandler;
-    private ViewOverlay viewOverlay = null;
-    private boolean closing = false;
+    private static IntSupplier BRAND_ARGB;
+
+    @Shadow
+    @Final
+    private static int MONOCHROME_BLACK;
+
+    @Shadow
+    @Final
+    private static int MOJANG_RED;
 
     @Inject(method = "<init>", at = @At("RETURN"))
-    private void hookSplashInit(CallbackInfo callbackInfo) {
-        final Page page = ThemeManager.INSTANCE.page("splashscreen");
-        if (page == null) return;
-
-        viewOverlay = UltralightEngine.INSTANCE.newSplashView();
-        viewOverlay.loadPage(page);
+    private void hookInit(CallbackInfo ci) {
+        if (!HideAppearance.INSTANCE.isHidingNow()) {
+            EventManager.INSTANCE.callEvent(new SplashOverlayEvent(true));
+            BRAND_ARGB = () -> ColorHelper.getArgb(255, 24, 26, 27);
+        } else {
+            BRAND_ARGB = () -> MinecraftClient.getInstance().options.getMonochromeLogo().getValue() ? MONOCHROME_BLACK : MOJANG_RED;
+        }
     }
 
-    @Inject(method = "render", at = @At("HEAD"), cancellable = true)
-    private void hookSplashRender(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        if (viewOverlay != null) {
-            if (this.reload.isComplete()) {
-                if (this.client.currentScreen != null) {
-                    this.client.currentScreen.render(context, 0, 0, delta);
-                }
+    @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/MinecraftClient;setOverlay(Lnet/minecraft/client/gui/screen/Overlay;)V"))
+    private void hookEnd(CallbackInfo ci) {
+        EventManager.INSTANCE.callEvent(new SplashOverlayEvent(false));
+    }
 
-                if (!closing) {
-                    closing = true;
-                    this.client.setOverlay(null);
+    @Unique
+    private float splashProgressBefore = -1;
 
-                    UltralightEngine.INSTANCE.removeView(viewOverlay);
-                }
+    @Unique
+    private boolean hasBeenCompleted = false;
 
-                try {
-                    this.reload.throwException();
-                    this.exceptionHandler.accept(Optional.empty());
-                } catch (Throwable throwable) {
-                    this.exceptionHandler.accept(Optional.of(throwable));
-                }
-            }
-
-            UltralightEngine.INSTANCE.render(RenderLayer.SPLASH_LAYER, context);
-            ci.cancel();
+    @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/resource/ResourceReload;getProgress()F"))
+    private void hookProgress(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+        if (HideAppearance.INSTANCE.isHidingNow()) {
+            return;
         }
+
+        var progress = reload.getProgress();
+        var isComplete = reload.isComplete();
+
+        if (hasBeenCompleted) {
+            return;
+        }
+
+        if (splashProgressBefore != progress || isComplete) {
+            EventManager.INSTANCE.callEvent(new SplashProgressEvent(progress, isComplete));
+            splashProgressBefore = progress;
+
+            if (isComplete) {
+                hasBeenCompleted = true;
+            }
+        }
+    }
+
+    @Inject(method = "render", at = @At("RETURN"))
+    private void render(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
+        EventManager.INSTANCE.callEvent(new ScreenRenderEvent(context, delta));
+    }
+
+    @WrapWithCondition(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/DrawContext;drawTexture(Ljava/util/function/Function;Lnet/minecraft/util/Identifier;IIFFIIIIIII)V"))
+    private boolean drawTexture(DrawContext instance, Function<Identifier, RenderLayer> renderLayers, Identifier sprite, int x, int y, float u, float v, int width, int height, int regionWidth, int regionHeight, int textureWidth, int textureHeight, int color) {
+        // do not draw texture - only when hiding
+        return HideAppearance.INSTANCE.isHidingNow();
     }
 
 }

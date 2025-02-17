@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,183 +18,223 @@
  */
 package net.ccbluex.liquidbounce.injection.mixins.minecraft.gui;
 
-import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
-import com.mojang.datafixers.util.Pair;
+import com.llamalad7.mixinextras.injector.ModifyExpressionValue;
 import net.ccbluex.liquidbounce.event.EventManager;
-import net.ccbluex.liquidbounce.event.events.OverlayRenderEvent;
+import net.ccbluex.liquidbounce.event.events.OverlayMessageEvent;
+import net.ccbluex.liquidbounce.event.events.PerspectiveEvent;
+import net.ccbluex.liquidbounce.features.module.modules.combat.ModuleSwordBlock;
 import net.ccbluex.liquidbounce.features.module.modules.render.ModuleAntiBlind;
 import net.ccbluex.liquidbounce.features.module.modules.render.ModuleFreeCam;
-import net.ccbluex.liquidbounce.features.module.modules.render.ModuleScoreboard;
+import net.ccbluex.liquidbounce.integration.theme.component.ComponentOverlay;
+import net.ccbluex.liquidbounce.integration.theme.component.FeatureTweak;
+import net.ccbluex.liquidbounce.integration.theme.component.types.IntegratedComponent;
+import net.ccbluex.liquidbounce.render.engine.UiRenderer;
 import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.font.TextRenderer;
 import net.minecraft.client.gui.DrawContext;
 import net.minecraft.client.gui.hud.InGameHud;
 import net.minecraft.client.option.Perspective;
-import net.minecraft.scoreboard.Scoreboard;
-import net.minecraft.scoreboard.ScoreboardObjective;
-import net.minecraft.scoreboard.ScoreboardPlayerScore;
-import net.minecraft.scoreboard.Team;
-import net.minecraft.text.MutableText;
+import net.minecraft.client.render.RenderTickCounter;
+import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.ItemStack;
 import net.minecraft.text.Text;
-import net.minecraft.util.Formatting;
 import net.minecraft.util.Identifier;
+import net.minecraft.world.GameMode;
+import org.jetbrains.annotations.Nullable;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
-import org.spongepowered.asm.mixin.Overwrite;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.List;
-import java.util.stream.Collectors;
 
 @Mixin(InGameHud.class)
 public abstract class MixinInGameHud {
 
     @Final
-    @Shadow
-    private static Identifier PUMPKIN_BLUR;
+    @Unique
+    private static final Identifier liquid_bounce$PUMPKIN_BLUR = Identifier.ofVanilla("misc/pumpkinblur");
 
     @Final
     @Shadow
     private static Identifier POWDER_SNOW_OUTLINE;
 
     @Shadow
-    public abstract TextRenderer getTextRenderer();
+    @Nullable
+    protected abstract PlayerEntity getCameraPlayer();
 
-    @Shadow
-    @Final
-    private static String SCOREBOARD_JOINER;
-
-    @Shadow
-    private int scaledHeight;
-
-    @Shadow
-    private int scaledWidth;
 
     @Shadow
     @Final
     private MinecraftClient client;
 
+    @Shadow
+    protected abstract void renderHotbarItem(DrawContext context, int x, int y, RenderTickCounter tickCounter, PlayerEntity player, ItemStack stack, int seed);
+
     /**
      * Hook render hud event at the top layer
      */
-    @Inject(method = "render", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/gui/hud/InGameHud;renderStatusEffectOverlay(Lnet/minecraft/client/gui/DrawContext;)V", shift = At.Shift.AFTER))
-    private void hookRenderEvent(DrawContext context, float tickDelta, CallbackInfo callbackInfo) {
-        EventManager.INSTANCE.callEvent(new OverlayRenderEvent(context, tickDelta));
+    @Inject(method = "renderMainHud", at = @At("HEAD"))
+    private void hookRenderEventStart(DrawContext context, RenderTickCounter tickCounter, CallbackInfo ci) {
+        UiRenderer.INSTANCE.startUIOverlayDrawing(context, tickCounter.getTickDelta(false));
+
+        // Draw after overlay event
+        var component = ComponentOverlay.getComponentWithTweak(FeatureTweak.TWEAK_HOTBAR);
+        if (component != null && component.getRunning() &&
+                client.interactionManager.getCurrentGameMode() != GameMode.SPECTATOR) {
+            drawHotbar(context, tickCounter, component);
+        }
     }
 
     @Inject(method = "renderOverlay", at = @At("HEAD"), cancellable = true)
     private void injectPumpkinBlur(DrawContext context, Identifier texture, float opacity, CallbackInfo callback) {
         ModuleAntiBlind module = ModuleAntiBlind.INSTANCE;
-        if (!module.getEnabled()) {
+        if (!module.getRunning()) {
             return;
         }
 
-        if (module.getPumpkinBlur() && PUMPKIN_BLUR.equals(texture)) {
+        if (module.getPumpkinBlur() && liquid_bounce$PUMPKIN_BLUR.equals(texture)) {
             callback.cancel();
             return;
         }
 
-        if (module.getPowerSnowFog() && POWDER_SNOW_OUTLINE.equals(texture)) {
+        if (module.getPowderSnowFog() && POWDER_SNOW_OUTLINE.equals(texture)) {
             callback.cancel();
         }
     }
 
-    @Redirect(method = "renderCrosshair", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/option/Perspective;isFirstPerson()Z"))
-    private boolean hookFreeCamRenderCrosshairInThirdPerson(Perspective instance) {
-        return ModuleFreeCam.INSTANCE.shouldRenderCrosshair(instance.isFirstPerson());
+    @Inject(method = "renderCrosshair", at = @At("HEAD"), cancellable = true)
+    private void hookFreeCamRenderCrosshairInThirdPerson(DrawContext context, RenderTickCounter tickCounter, CallbackInfo ci) {
+        if ((ModuleFreeCam.INSTANCE.getRunning() && ModuleFreeCam.INSTANCE.shouldDisableCameraInteract())
+                || ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_CROSSHAIR)) {
+            ci.cancel();
+        }
     }
 
-    /**
-     * @author
-     * @reason
-     *
-     * todo: use injection instead of overwrite
-     */
-    @Overwrite
-    private void renderScoreboardSidebar(DrawContext context, ScoreboardObjective objective) {
-        if (ModuleScoreboard.INSTANCE.getEnabled() && ModuleScoreboard.INSTANCE.getTurnOff()) {
+    @Inject(method = "renderPortalOverlay", at = @At("HEAD"), cancellable = true)
+    private void hookRenderPortalOverlay(CallbackInfo ci) {
+        var antiBlind = ModuleAntiBlind.INSTANCE;
+        if (antiBlind.getRunning() && antiBlind.getPortalOverlay()) {
+            ci.cancel();
+        }
+    }
+
+
+    @Inject(method = "renderScoreboardSidebar*", at = @At("HEAD"), cancellable = true)
+    private void renderScoreboardSidebar(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_SCOREBOARD)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "renderHotbar", at = @At("HEAD"), cancellable = true)
+    private void hookRenderHotbar(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.TWEAK_HOTBAR)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "renderStatusBars", at = @At("HEAD"), cancellable = true)
+    private void hookRenderStatusBars(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_STATUS_BAR)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "renderExperienceBar", at = @At("HEAD"), cancellable = true)
+    private void hookRenderExperienceBar(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_EXP_BAR)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "renderExperienceLevel", at = @At("HEAD"), cancellable = true)
+    private void hookRenderExperienceLevel(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_EXP_BAR)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "renderHeldItemTooltip", at = @At("HEAD"), cancellable = true)
+    private void hookRenderHeldItemTooltip(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_HELD_ITEM_TOOL_TIP)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "setOverlayMessage", at = @At("HEAD"), cancellable = true)
+    private void hookSetOverlayMessage(Text message, boolean tinted, CallbackInfo ci) {
+        EventManager.INSTANCE.callEvent(new OverlayMessageEvent(message, tinted));
+
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_OVERLAY_MESSAGE)) {
+            ci.cancel();
+        }
+    }
+
+    @Inject(method = "renderStatusEffectOverlay", at = @At("HEAD"), cancellable = true)
+    private void hookRenderStatusEffectOverlay(CallbackInfo ci) {
+        if (ComponentOverlay.isTweakEnabled(FeatureTweak.DISABLE_STATUS_EFFECT_OVERLAY)) {
+            ci.cancel();
+        }
+    }
+
+    @ModifyExpressionValue(method = "renderHotbar", at = @At(value = "INVOKE", target = "Lnet/minecraft/item/ItemStack;isEmpty()Z"))
+    private boolean hookOffhandItem(boolean original) {
+        return original || ModuleSwordBlock.INSTANCE.shouldHideOffhand() && ModuleSwordBlock.INSTANCE.getHideShieldSlot();
+    }
+
+    @Unique
+    private void drawHotbar(DrawContext context, RenderTickCounter tickCounter, IntegratedComponent component) {
+        var playerEntity = this.getCameraPlayer();
+        if (playerEntity == null) {
             return;
         }
 
-        int i;
-        Scoreboard scoreboard = objective.getScoreboard();
-        Collection<ScoreboardPlayerScore> collection = scoreboard.getAllPlayerScores(objective);
-        List list = collection.stream().filter(score -> score.getPlayerName() != null &&
-                !score.getPlayerName().startsWith("#")).collect(Collectors.toList());
-        collection = list.size() > 15 ? Lists.newArrayList(Iterables.skip(list, collection.size() - 15))
-                : list;
-        ArrayList<Pair<ScoreboardPlayerScore, MutableText>> list2 = Lists.newArrayListWithCapacity(collection.size());
-        Text text = objective.getDisplayName();
+        var itemWidth = 22.5;
+        var offset = 98;
+        var bounds = component.getAlignment().getBounds(0, 0);
 
-        final TextRenderer textRenderer = getTextRenderer();
+        int center = (int) bounds.getXMin();
+        var y = bounds.getYMin() - 12;
 
-        // Calculate width and height of scoreboard
-        int widthOfScoreboard = i = textRenderer.getWidth(text);
-        int joinerWidth = textRenderer.getWidth(SCOREBOARD_JOINER);
-        for (ScoreboardPlayerScore scoreboardPlayerScore : collection) {
-            final Team team = scoreboard.getPlayerTeam(scoreboardPlayerScore.getPlayerName());
-            final MutableText text2 = Team.decorateName(team, Text.literal(scoreboardPlayerScore.getPlayerName()));
-            list2.add(Pair.of(scoreboardPlayerScore, text2));
-            widthOfScoreboard = Math.max(widthOfScoreboard, textRenderer.getWidth(text2) + joinerWidth +
-                    textRenderer.getWidth(Integer.toString(scoreboardPlayerScore.getScore())));
-        }
-        int heightOfScoreboard = collection.size() * textRenderer.fontHeight;
-
-        // Figure out where to render scoreboard
-        int scoreboardPositionY = this.scaledHeight / 2 + heightOfScoreboard / 3;
-        int scoreboardPositionX = this.scaledWidth - widthOfScoreboard - 3;
-
-        if (ModuleScoreboard.INSTANCE.getEnabled()) {
-            final var alignment = ModuleScoreboard.INSTANCE.getAlignment().getBounds(widthOfScoreboard,
-                    heightOfScoreboard / 3f);
-            scoreboardPositionX = (int) alignment.getXMin();
-            scoreboardPositionY = (int) alignment.getYMin();
-        } else {
-            // By default, we add 60 to the scoreboard position, this makes the arraylist more readable
-            scoreboardPositionY += 60;
+        int l = 1;
+        for (int m = 0; m < 9; ++m) {
+            var x = center - offset + m * itemWidth;
+            this.renderHotbarItem(context, (int) x, (int) y, tickCounter, playerEntity,
+                    playerEntity.getInventory().main.get(m), l++);
         }
 
-        int count = 0;
-        int bgColor = this.client.options.getTextBackgroundColor(0.3f);
-        int secondBgColor = this.client.options.getTextBackgroundColor(0.4f);
+        var offHandStack = playerEntity.getOffHandStack();
+        if (!hookOffhandItem(offHandStack.isEmpty())) {
+            this.renderHotbarItem(context, center - offset - 32, (int) y, tickCounter, playerEntity, offHandStack, l++);
+        }
+    }
 
-        // Draw each scoreboard entry
-        for (Pair pair : list2) {
-            ScoreboardPlayerScore scoreboardPlayerScore2 = (ScoreboardPlayerScore) pair.getFirst();
-            Text text3 = (Text) pair.getSecond();
-            String string = "" + Formatting.RED + scoreboardPlayerScore2.getScore();
+    @ModifyExpressionValue(method = "renderCrosshair",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/option/GameOptions;getPerspective()Lnet/minecraft/client/option/Perspective;"
+            )
+    )
+    private Perspective hookPerspectiveEventOnCrosshair(Perspective original) {
+        return EventManager.INSTANCE.callEvent(new PerspectiveEvent(original)).getPerspective();
+    }
 
-            int t = scoreboardPositionY - ++count * textRenderer.fontHeight;
-            int u = this.scaledWidth - 3 + 2;
+    @ModifyExpressionValue(method = "renderMiscOverlays",
+            at = @At(
+                    value = "INVOKE",
+                    target = "Lnet/minecraft/client/option/GameOptions;getPerspective()Lnet/minecraft/client/option/Perspective;"
+            )
+    )
+    private Perspective hookPerspectiveEventOnMiscOverlays(Perspective original) {
+        return EventManager.INSTANCE.callEvent(new PerspectiveEvent(original)).getPerspective();
+    }
 
-            // Draw scoreboard bar
-            if (ModuleScoreboard.INSTANCE.getEnabled()) {
-                final var alignment = ModuleScoreboard.INSTANCE.getAlignment().getBounds(widthOfScoreboard,
-                        heightOfScoreboard);
-                u = (int) alignment.getXMax() + 1;
-            } else {
-                u += 1;
-            }
-
-            context.fill(scoreboardPositionX - 2, t, u, t + textRenderer.fontHeight, bgColor);
-            context.drawText(textRenderer, text3, scoreboardPositionX, t, -1, false);
-            context.drawText(textRenderer, string, u - textRenderer.getWidth(string), t, -1, false);
-
-            if (count != collection.size()) {
-                continue;
-            }
-
-            context.fill(scoreboardPositionX - 2, t - textRenderer.fontHeight - 1, u, t - 1, secondBgColor);
-            context.fill(scoreboardPositionX - 2, t - 1, u, t, bgColor);
-            context.drawText(textRenderer, text, scoreboardPositionX + widthOfScoreboard / 2 - i / 2,
-                    t - textRenderer.fontHeight, -1, false);
+    @Inject(method = "renderNauseaOverlay", at = @At("HEAD"), cancellable = true)
+    private void hookNauseaOverlay(DrawContext context, float distortionStrength, CallbackInfo ci) {
+        var antiBlind = ModuleAntiBlind.INSTANCE;
+        if (antiBlind.getRunning() && antiBlind.getAntiNausea()) {
+            ci.cancel();
         }
     }
 

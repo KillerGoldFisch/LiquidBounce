@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,14 +16,13 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.features.module.modules.misc
 
 import net.ccbluex.liquidbounce.event.events.NotificationEvent
 import net.ccbluex.liquidbounce.event.events.PacketEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.ccbluex.liquidbounce.utils.client.chat
 import net.ccbluex.liquidbounce.utils.client.notification
 import net.ccbluex.liquidbounce.utils.client.regular
@@ -36,15 +35,15 @@ import java.util.*
  *
  * Notifies you about all kinds of events.
  */
-object ModuleNotifier : Module("Notifier", Category.MISC) {
+object ModuleNotifier : ClientModule("Notifier", Category.MISC) {
 
-    private val joinMessages by boolean("Join Messages", true)
-    private val joinMessageFormat by text("Join Message Format", "%s joined")
+    private val joinMessages by boolean("JoinMessages", true)
+    private val joinMessageFormat by text("JoinMessageFormat", "%s joined")
 
-    private val leaveMessages by boolean("Leave Messages", true)
-    private val leaveMessageFormat by text("Leave Message Format", "%s left")
+    private val leaveMessages by boolean("LeaveMessages", true)
+    private val leaveMessageFormat by text("LeaveMessageFormat", "%s left")
 
-    private val useNotification by boolean("Use Notification", false)
+    private val useNotification by boolean("UseNotification", false)
 
     private val uuidNameCache = hashMapOf<UUID, String>()
 
@@ -63,10 +62,12 @@ object ModuleNotifier : Module("Notifier", Category.MISC) {
 
         if (packet is PlayerListS2CPacket) {
             for (entry in packet.playerAdditionEntries) {
-                if (entry.profile.name != null && entry.profile.name.length > 2) {
-                    uuidNameCache[entry.profile.id] = entry.profile.name
+                val profile = entry.profile ?: continue
+
+                if (profile.name != null && profile.name.length > 2) {
+                    uuidNameCache[profile.id] = profile.name
                     if (joinMessages) {
-                        val message = joinMessageFormat.format(entry.profile.name)
+                        val message = joinMessageFormat.format(profile.name)
 
                         if (useNotification) {
                             notification("Notifier", message, NotificationEvent.Severity.INFO)

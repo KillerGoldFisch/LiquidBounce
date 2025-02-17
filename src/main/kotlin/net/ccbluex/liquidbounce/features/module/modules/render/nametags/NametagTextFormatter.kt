@@ -1,89 +1,139 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.render.nametags
 
 import net.ccbluex.liquidbounce.features.module.modules.misc.antibot.ModuleAntiBot
-import net.ccbluex.liquidbounce.utils.client.mc
+import net.ccbluex.liquidbounce.features.module.modules.misc.nameprotect.sanitizeForeignInput
+import net.ccbluex.liquidbounce.utils.client.asText
+import net.ccbluex.liquidbounce.utils.client.player
+import net.ccbluex.liquidbounce.utils.client.regular
+import net.ccbluex.liquidbounce.utils.client.withColor
+import net.ccbluex.liquidbounce.utils.combat.EntityTaggingManager
+import net.ccbluex.liquidbounce.utils.entity.getActualHealth
 import net.ccbluex.liquidbounce.utils.entity.ping
 import net.minecraft.entity.Entity
 import net.minecraft.entity.LivingEntity
 import net.minecraft.entity.player.PlayerEntity
+import net.minecraft.text.MutableText
+import net.minecraft.text.Text
+import net.minecraft.text.TextColor
+import net.minecraft.util.Formatting
 import kotlin.math.roundToInt
 
 class NametagTextFormatter(private val entity: Entity) {
-    fun format(): String {
-        val outputBuilder = StringBuilder()
+    fun format(): Text {
+        val outputText = Text.empty()
 
-        if (ModuleNametags.distance) {
-            outputBuilder.append(this.distanceText).append(" ")
+        if (ModuleNametags.ShowOptions.distance) {
+            outputText.append(this.distanceText).append(" ")
         }
-        if (ModuleNametags.ping) {
-            outputBuilder.append(this.pingText).append(" ")
+        if (ModuleNametags.ShowOptions.ping) {
+            outputText.append(this.pingText).append(" ")
         }
 
-        outputBuilder.append("${this.nameColor}${entity.displayName.string}")
+        val name = entity.displayName!!
+        val nameColor = this.nameColor
 
-        if (ModuleNametags.Health.enabled) {
-            outputBuilder.append(" ").append(this.healthText)
+        val nameText: Text = if (nameColor != null) {
+            name.string.asText().styled { it.withColor(nameColor) }
+        } else {
+            name
+        }
+
+        outputText.append(nameText)
+
+        if (ModuleNametags.ShowOptions.health) {
+            outputText.append(" ").append(this.healthText)
         }
 
         if (this.isBot) {
-            outputBuilder.append(" §c§lBot")
+            outputText.append(" ").append("Bot".asText().styled { it.withColor(Formatting.RED).withBold(true) })
         }
 
-        return outputBuilder.toString()
+        return outputText
     }
 
     private val isBot = ModuleAntiBot.isBot(entity)
 
-    private val nameColor: String
-        get() = when {
-            isBot -> "§3"
-            entity.isInvisible -> "§6"
-            entity.isSneaking -> "§4"
-            else -> "§7"
+    private val nameColor: TextColor?
+        get() {
+            val tagColor = EntityTaggingManager.getTag(this.entity).color
+
+            return when {
+                isBot -> Formatting.DARK_AQUA.toTextColor()
+                entity.isInvisible -> Formatting.GOLD.toTextColor()
+                entity.isSneaking -> Formatting.DARK_RED.toTextColor()
+                tagColor != null -> TextColor.fromRgb(tagColor.toARGB())
+                else -> null
+            }
         }
 
-    private val distanceText: String
+    private val distanceText: Text
         get() {
-            val playerDistanceRounded = mc.player!!.distanceTo(entity).roundToInt()
+            val playerDistanceRounded = player.distanceTo(entity).roundToInt()
 
-            return "§7${playerDistanceRounded}m"
+            return withColor("${playerDistanceRounded}m", Formatting.GRAY)
         }
 
     private fun getPing(entity: Entity): Int? {
         return (entity as? PlayerEntity)?.ping
     }
 
-    private val pingText: String
+    private val pingText: Text
         get() {
-            val playerPing = getPing(entity) ?: return ""
+            val playerPing = getPing(entity) ?: return Text.of("")
 
             val coloringBasedOnPing = when {
-                playerPing > 200 -> "§c"
-                playerPing > 100 -> "§e"
-                else -> "§a"
+                playerPing > 200 -> Formatting.RED
+                playerPing > 100 -> Formatting.YELLOW
+                else -> Formatting.GREEN
             }
 
-            return " §7[" + coloringBasedOnPing + playerPing + "ms§7]"
+            return regular(" [") + withColor(playerPing.toString() + "ms", coloringBasedOnPing) + regular("]")
         }
 
-    private val healthText: String
+    private val healthText: Text
         get() {
             if (entity !is LivingEntity) {
-                return ""
+                return regular("")
             }
 
-            var health = entity.health.toInt()
+            val actualHealth = entity.getActualHealth().toInt()
 
-            if (ModuleNametags.Health.fromScoreboard) {
-                entity.world.scoreboard.getObjectiveForSlot(2)?.let {
-                    it.scoreboard.getPlayerScore(entity.entityName, it)?.let { scoreboard ->
-                        if (scoreboard.score > 0 && scoreboard.objective?.displayName?.string == "❤") {
-                            health = scoreboard.score
-                        }
-                    }
-                }
+            val healthColor = when {
+                // Perhaps you should modify the values here
+                actualHealth >= 14 -> Formatting.GREEN
+                actualHealth >= 8 -> Formatting.YELLOW
+                else -> Formatting.RED
             }
 
-            return "§c${health} HP"
+            return withColor("$actualHealth HP", healthColor)
+
         }
+}
+
+private fun Formatting.toTextColor(): TextColor {
+    return TextColor(this.colorValue!!, this.name)
+}
+
+operator fun MutableText.plus(text: MutableText): MutableText {
+    this.append(text)
+
+    return this
 }

@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,18 +16,23 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.features.module.modules.combat
 
-import net.ccbluex.liquidbounce.config.Choice
-import net.ccbluex.liquidbounce.config.ChoiceConfigurable
-import net.ccbluex.liquidbounce.event.Event
-import net.ccbluex.liquidbounce.event.Sequence
-import net.ccbluex.liquidbounce.event.events.AttackEvent
+import net.ccbluex.liquidbounce.config.types.Choice
+import net.ccbluex.liquidbounce.config.types.ChoiceConfigurable
+import net.ccbluex.liquidbounce.config.types.ToggleableConfigurable
+import net.ccbluex.liquidbounce.event.events.AttackEntityEvent
+import net.ccbluex.liquidbounce.event.events.MovementInputEvent
+import net.ccbluex.liquidbounce.event.events.SprintEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.event.sequenceHandler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
+import net.ccbluex.liquidbounce.features.module.modules.combat.criticals.ModuleCriticals
+import net.ccbluex.liquidbounce.utils.kotlin.EventPriorityConvention.CRITICAL_MODIFICATION
+import net.ccbluex.liquidbounce.utils.math.minus
+import net.ccbluex.liquidbounce.utils.movement.DirectionalInput
+import net.minecraft.entity.Entity
 import net.minecraft.entity.LivingEntity
 import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket
 
@@ -36,21 +41,41 @@ import net.minecraft.network.packet.c2s.play.ClientCommandC2SPacket
  *
  * Increases knockback dealt to other entities.
  */
-object ModuleSuperKnockback : Module("SuperKnockback", Category.COMBAT) {
+object ModuleSuperKnockback : ClientModule("SuperKnockback", Category.COMBAT, aliases = arrayOf("WTap")) {
 
-    val modes = choices("Mode", Packet, arrayOf(Packet, SprintTap, WTap))
+    val modes = choices("Mode", Packet, arrayOf(Packet, SprintTap, WTap)).apply(::tagBy)
     val hurtTime by int("HurtTime", 10, 0..10)
-    val chance by int("Chance", 100, 0..100)
+    val chance by int("Chance", 100, 0..100, "%")
+    val onlyFacing by boolean("OnlyFacing", false)
+    val onlyOnGround by boolean("OnlyOnGround", false)
+    val notInWater by boolean("NotInWater", true)
+
+    private object OnlyOnMove : ToggleableConfigurable(this, "OnlyOnMove", true) {
+        val onlyForward by boolean("OnlyForward", true)
+    }
+
+    init {
+        tree(OnlyOnMove)
+    }
 
     object Packet : Choice("Packet") {
-        override val parent: ChoiceConfigurable
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
-        val attackHandler = handler<AttackEvent> { event ->
-            val enemy = event.enemy
+        @Suppress("unused")
+        private val attackHandler = handler<AttackEntityEvent> { event ->
+            if (event.isCancelled) {
+                return@handler
+            }
+
+            val enemy = event.entity
+
+            if (!shouldOperate(enemy)) {
+                return@handler
+            }
 
             if (enemy is LivingEntity && enemy.hurtTime <= hurtTime && chance >= (0..100).random() &&
-                !ModuleCriticals.wouldCrit()) {
+                !ModuleCriticals.wouldDoCriticalHit()) {
                 if (player.isSprinting) {
                     network.sendPacket(ClientCommandC2SPacket(player, ClientCommandC2SPacket.Mode.STOP_SPRINTING))
                 }
@@ -66,81 +91,119 @@ object ModuleSuperKnockback : Module("SuperKnockback", Category.COMBAT) {
     }
 
     object SprintTap : Choice("SprintTap") {
-        override val parent: ChoiceConfigurable
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
-        val reSprintTicks by intRange("ReSprintTicks", 0..1, 0..10)
+        private val reSprintTicks by intRange("ReSprint", 0..1, 0..10, "ticks")
 
-        var antiSprint = false
+        private var cancelSprint = false
 
-        override fun enable() {
-            antiSprint = false
-        }
-
-        val attackHandler = sequenceHandler<AttackEvent> { event ->
-            if (!shouldStopSprinting(event)) {
+        @Suppress("unused")
+        private val attackHandler = sequenceHandler<AttackEntityEvent> { event ->
+            if (event.isCancelled || !shouldOperate(event.entity) || !shouldStopSprinting(event) || cancelSprint) {
                 return@sequenceHandler
             }
 
-            antiSprint = true
-
+            cancelSprint = true
             waitUntil { !player.isSprinting && !player.lastSprinting }
             waitTicks(reSprintTicks.random())
-
-            antiSprint = false
+            cancelSprint = false
         }
+
+        @Suppress("unused")
+        private val movementHandler = handler<SprintEvent>(
+            priority = CRITICAL_MODIFICATION
+        ) { event ->
+            if (cancelSprint && (event.source == SprintEvent.Source.MOVEMENT_TICK ||
+                    event.source == SprintEvent.Source.INPUT)) {
+                event.sprint = false
+            }
+        }
+
+        override fun disable() {
+            cancelSprint = false
+            super.disable()
+        }
+
     }
 
     object WTap : Choice("WTap") {
-        override val parent: ChoiceConfigurable
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
-        val ticksUntilMovementBlock by intRange("TicksUntilMovementBlock", 0..1, 0..10)
-        val ticksUntilAllowedMovement by intRange("TicksUntilAllowedMovement", 0..1, 0..10)
+        private val ticksUntilMovementBlock by intRange("UntilMovementBlock", 0..1, 0..10,
+            "ticks")
+        private val ticksUntilAllowedMovement by intRange("UntilAllowedMovement", 0..1, 0..10,
+            "ticks")
 
-        var stopMoving = false
+        private var inSequence = false
+        private var cancelMovement = false
 
-        override fun enable() {
-            stopMoving = false
-        }
-
-        val attackHandler = sequenceHandler<AttackEvent> { event ->
-            if (!shouldStopSprinting(event)) {
+        @Suppress("unused")
+        private val attackHandler = sequenceHandler<AttackEntityEvent> { event ->
+            if (event.isCancelled || !shouldOperate(event.entity) || !shouldStopSprinting(event) || inSequence) {
                 return@sequenceHandler
             }
 
+            inSequence = true
             waitTicks(ticksUntilMovementBlock.random())
-            stopMoving = true
+            cancelMovement = true
             waitUntil { !player.input.hasForwardMovement() }
             waitTicks(ticksUntilAllowedMovement.random())
-            stopMoving = false
+            cancelMovement = false
+            inSequence = false
         }
+
+        @Suppress("unused")
+        private val movementHandler = handler<MovementInputEvent> { event ->
+            if (inSequence && cancelMovement) {
+                event.directionalInput = DirectionalInput.NONE
+            }
+        }
+
+        override fun disable() {
+            cancelMovement = false
+            inSequence = false
+            super.disable()
+        }
+
     }
 
-    fun shouldBlockSprinting() = enabled && SprintTap.isActive && SprintTap.antiSprint
-
-    fun shouldStopMoving() = enabled && WTap.isActive && WTap.stopMoving
-
-    private suspend fun <T : Event> Sequence<T>.shouldStopSprinting(event: AttackEvent): Boolean {
-        val enemy = event.enemy
-
-        if (!player.isSprinting && !player.lastSprinting) {
-            return false
-        }
-
-        val doWorkaround = !player.isSprinting && player.lastSprinting
-
-        // TODO: remove this once the issue with sequence type events being a bit late to detect player.isSprinting so these modes perform even better
-        if (doWorkaround) {
-            sync()
-        }
+    private fun shouldStopSprinting(event: AttackEntityEvent): Boolean {
+        val enemy = event.entity
 
         if (!player.isSprinting || !player.lastSprinting) {
             return false
         }
 
         return enemy is LivingEntity && enemy.hurtTime <= hurtTime && chance >= (0..100).random()
-            && !ModuleCriticals.wouldCrit()
+            && !ModuleCriticals.wouldDoCriticalHit()
+    }
+
+    private fun shouldOperate(target: Entity): Boolean {
+        if (onlyOnGround && !player.isOnGround) {
+            return false
+        }
+
+        if (notInWater && player.isInsideWaterOrBubbleColumn) {
+            return false
+        }
+
+        if (OnlyOnMove.enabled) {
+            val isMovingSideways = player.input.movementSideways != 0f
+            val isMoving = player.input.movementForward != 0f || isMovingSideways
+
+            if (!isMoving || (OnlyOnMove.onlyForward && isMovingSideways)) {
+                return false
+            }
+        }
+
+        if (onlyFacing && target.rotationVector.dotProduct(player.pos - target.pos) < 0) {
+            // Target is not facing the player
+            return false
+        }
+
+        return true
     }
 
 }

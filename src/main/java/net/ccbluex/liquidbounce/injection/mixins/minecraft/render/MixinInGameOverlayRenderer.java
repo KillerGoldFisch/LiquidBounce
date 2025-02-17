@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,21 +20,34 @@
 package net.ccbluex.liquidbounce.injection.mixins.minecraft.render;
 
 import net.ccbluex.liquidbounce.features.module.modules.render.ModuleAntiBlind;
-import net.ccbluex.liquidbounce.interfaces.IMixinGameRenderer;
 import net.minecraft.client.gui.hud.InGameOverlayRenderer;
 import net.minecraft.client.render.VertexConsumer;
+import net.minecraft.client.render.VertexConsumerProvider;
+import net.minecraft.client.texture.Sprite;
+import net.minecraft.client.util.math.MatrixStack;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(InGameOverlayRenderer.class)
-public abstract class MixinInGameOverlayRenderer implements IMixinGameRenderer {
+public abstract class MixinInGameOverlayRenderer {
 
     @Redirect(method = "renderFireOverlay", at = @At(value = "INVOKE", target = "Lnet/minecraft/client/render/VertexConsumer;color(FFFF)Lnet/minecraft/client/render/VertexConsumer;"))
     private static VertexConsumer injectFireOpacity(VertexConsumer vertexConsumer, float red, float green, float blue, float alpha) {
         return vertexConsumer.color(red,
                 green,
                 blue,
-                ModuleAntiBlind.INSTANCE.getEnabled() ? ModuleAntiBlind.INSTANCE.getFireOpacity() * alpha : alpha);
+                ModuleAntiBlind.INSTANCE.getRunning() ? ModuleAntiBlind.INSTANCE.getFireOpacity() * alpha : alpha);
     }
+
+    @Inject(method = "renderInWallOverlay", at = @At("HEAD"), cancellable = true)
+    private static void hookWallOverlay(Sprite sprite, MatrixStack matrices, VertexConsumerProvider vertexConsumers, CallbackInfo ci) {
+        var antiBlind = ModuleAntiBlind.INSTANCE;
+        if (antiBlind.getRunning() && antiBlind.getWallOverlay()) {
+            ci.cancel();
+        }
+    }
+
 }

@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,7 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.utils.block
 
 import net.minecraft.util.math.BlockPos
@@ -28,27 +27,25 @@ class MovableRegionScanner {
         private set
 
     /**
-     * Moves the current region; returns regions that have been newly covered,
-     * if the regions are identical null
+     * Moves the current region; returns regions that have been newly covered
      */
-    fun moveRegion(region: Region): List<Region>? {
+    fun moveTo(region: Region): Sequence<Region> {
         val lastRegion = this.currentRegion
 
         this.currentRegion = region
 
-        if (lastRegion == region) {
-            return null
+        return when {
+            // No new blocks where covered
+            lastRegion == region || region in lastRegion -> emptySequence()
+            // All blocks are new
+            !lastRegion.intersects(region) -> sequenceOf(region)
+            // Some of the blocks are new, we have to check...
+            else -> overlaps(region, lastRegion).filter { !it.isEmpty() }
         }
+    }
 
-        if (region in lastRegion) {
-            return listOf()
-        }
-
-        if (!lastRegion.intersects(region)) {
-            return listOf(region)
-        }
-
-        val returnCandidates = arrayOf(
+    private fun overlaps(region: Region, lastRegion: Region): Sequence<Region> {
+        return sequenceOf(
             Region(
                 BlockPos(min(region.to.x, lastRegion.to.x), region.from.y, region.from.z),
                 BlockPos(max(region.to.x, lastRegion.to.x), region.to.y, region.to.z)
@@ -74,8 +71,6 @@ class MovableRegionScanner {
                 BlockPos(region.to.x, region.to.y, max(region.from.z, lastRegion.from.z))
             )
         )
-
-        return returnCandidates.filter { !it.isEmpty() && it in region }
     }
 
     fun clearRegion() {

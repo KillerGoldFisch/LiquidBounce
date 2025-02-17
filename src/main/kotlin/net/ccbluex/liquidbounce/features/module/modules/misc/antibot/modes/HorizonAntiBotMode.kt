@@ -1,7 +1,25 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.misc.antibot.modes
 
-import net.ccbluex.liquidbounce.config.Choice
-import net.ccbluex.liquidbounce.config.ChoiceConfigurable
+import net.ccbluex.liquidbounce.config.types.Choice
+import net.ccbluex.liquidbounce.config.types.ChoiceConfigurable
 import net.ccbluex.liquidbounce.event.events.PacketEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.modules.misc.antibot.ModuleAntiBot
@@ -11,10 +29,10 @@ import net.minecraft.network.packet.s2c.play.PlayerRemoveS2CPacket
 import java.util.*
 
 object HorizonAntiBotMode : Choice("Horizon"), ModuleAntiBot.IAntiBotMode {
-    override val parent: ChoiceConfigurable
+    override val parent: ChoiceConfigurable<*>
         get() = ModuleAntiBot.modes
 
-    private val botList = HashSet<UUID>()
+    private val botList = hashSetOf<UUID>()
 
     val packetHandler = handler<PacketEvent> {
         when (val packet = it.packet) {
@@ -31,17 +49,13 @@ object HorizonAntiBotMode : Choice("Horizon"), ModuleAntiBot.IAntiBotMode {
             }
 
             is PlayerRemoveS2CPacket -> {
-                for (id in packet.profileIds) {
-                    if (botList.contains(id)) {
-                        botList.remove(id)
-                    }
-                }
+                packet.profileIds.forEach(botList::remove)
             }
         }
     }
 
     override fun isBot(entity: PlayerEntity): Boolean {
-        return botList.contains(player.uuid)
+        return botList.contains(entity.uuid)
     }
 
     override fun reset() {

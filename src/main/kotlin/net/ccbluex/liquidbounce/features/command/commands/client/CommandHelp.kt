@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2016 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,21 +20,27 @@ package net.ccbluex.liquidbounce.features.command.commands.client
 
 import net.ccbluex.liquidbounce.features.command.Command
 import net.ccbluex.liquidbounce.features.command.CommandException
+import net.ccbluex.liquidbounce.features.command.CommandFactory
 import net.ccbluex.liquidbounce.features.command.CommandManager
 import net.ccbluex.liquidbounce.features.command.builder.CommandBuilder
 import net.ccbluex.liquidbounce.features.command.builder.pageParameter
-import net.ccbluex.liquidbounce.utils.client.asText
-import net.ccbluex.liquidbounce.utils.client.chat
-import net.ccbluex.liquidbounce.utils.client.regular
-import net.ccbluex.liquidbounce.utils.client.variable
+import net.ccbluex.liquidbounce.lang.translation
+import net.ccbluex.liquidbounce.utils.client.*
+import net.minecraft.client.gui.screen.ChatScreen
+import net.minecraft.text.HoverEvent
 import net.minecraft.text.Text
 import net.minecraft.util.Formatting
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
-object CommandHelp {
+/**
+ * Help Command
+ *
+ * Provides a help page for displaying other commands.
+ */
+object CommandHelp : CommandFactory {
 
-    fun createCommand(): Command {
+    override fun createCommand(): Command {
         return CommandBuilder
             .begin("help")
             .parameter(
@@ -43,7 +49,7 @@ object CommandHelp {
                     .build()
             )
             .handler { command, args ->
-                val page = if (args.size > 1) {
+                val page = if (args.size > 0) {
                     args[0] as Int
                 } else {
                     1
@@ -57,35 +63,130 @@ object CommandHelp {
                     throw CommandException(command.result("pageNumberTooLarge", maxPage))
                 }
 
-                // Print out help page
-                chat(command.result("help").styled { it.withColor(Formatting.RED).withBold(true) })
-                chat(regular(command.result("pageCount", variable("$page / $maxPage"))))
-
-                val iterPage = 8 * page
-                for (cmd in commands.subList(iterPage - 8, iterPage.coerceAtMost(commands.size))) {
-                    val aliases = Text.literal("")
-
-                    if (cmd.aliases.isNotEmpty()) {
-                        cmd.aliases.forEach { alias -> aliases.append(variable(", ")).append(regular(alias)) }
-                    }
-
-                    chat(
-                        "- ".asText()
-                            .styled { it.withColor(Formatting.BLUE) }
-                            .append(CommandManager.Options.prefix + cmd.name)
-                            .styled { it.withColor(Formatting.GRAY) }
-                            .append(aliases)
-                    )
-                }
-
-                chat(
-                    "--- ".asText()
-                        .styled { it.withColor(Formatting.DARK_GRAY) }
-                        .append(variable("${CommandManager.Options.prefix}help <"))
-                        .append(variable(command.result("page")))
-                        .append(variable(">"))
-                )
+                printMessage(command, page, maxPage, commands)
             }
             .build()
     }
+
+    /**
+     * Prints the help page.
+     */
+    private fun printMessage(
+        command: Command,
+        page: Int,
+        maxPage: Int,
+        commands: List<Command>
+    ) {
+        printHeader(command)
+        printPageCount(command, page, maxPage)
+
+        mc.inGameHud.chatHud.removeMessage("CommandHelp#Info")
+
+        val iterPage = 8 * page
+        val commandsToShow = commands.subList(iterPage - 8, iterPage.coerceAtMost(commands.size))
+        commandsToShow.forEach { cmd ->
+            val aliasesText = buildAliasesText(cmd)
+            printCommandHelp(CommandManager.Options.prefix, cmd, aliasesText)
+        }
+
+        printNavigation(command, page, maxPage, commands)
+    }
+
+    private fun printHeader(command: Command) {
+        chat(
+            command.result("help").styled { it.withColor(Formatting.RED).withBold(true) },
+            metadata = MessageMetadata(id = "CommandHelp#Help")
+        )
+    }
+
+    private fun printPageCount(command: Command, page: Int, maxPage: Int) {
+        chat(
+            regular(command.result("pageCount", variable("$page / $maxPage"))),
+            metadata = MessageMetadata(id = "CommandHelp#PageCount")
+        )
+    }
+
+    private fun buildAliasesText(cmd: Command): Text {
+        val aliasesText = Text.literal("")
+
+        if (cmd.aliases.isNotEmpty()) {
+            cmd.aliases.forEach { alias ->
+                aliasesText
+                    .append(variable(", "))
+                    .append(
+                        regular(alias)
+                            .styled { it.withColor(Formatting.GRAY) }
+                            .styled {
+                                it.withClickEvent(RunnableClickEvent {
+                                    mc.run { mc.setScreen(ChatScreen(CommandManager.Options.prefix + alias)) }
+                                })
+                            }
+                    )
+            }
+        }
+
+        return aliasesText
+    }
+
+    private fun printCommandHelp(prefix: String, cmd: Command, aliasesText: Text) {
+        val commandStart = prefix + cmd.name
+        chat(
+            "- ".asText()
+                .styled { it.withColor(Formatting.BLUE) }
+                .styled {
+                    it.withHoverEvent(
+                        HoverEvent(
+                            HoverEvent.Action.SHOW_TEXT,
+                            translation("liquidbounce.command.${cmd.name}.description")
+                        )
+                    )
+                }
+                .append(
+                    commandStart.asText()
+                        .styled { it.withColor(Formatting.GRAY) }
+                        .styled {
+                            it.withClickEvent(RunnableClickEvent {
+                                mc.run { mc.setScreen(ChatScreen(commandStart)) }
+                            })
+                        }
+                )
+                .append(aliasesText),
+            metadata = MessageMetadata(id = "CommandHelp#Info", remove = false)
+        )
+    }
+
+    private fun printNavigation(command: Command, page: Int, maxPage: Int, commands: List<Command>) {
+        val nextPage = (page % maxPage) + 1
+        val previousPage = if (page - 1 < 1) maxPage else page - 1
+        chat(
+            "".asText()
+                .styled { it.withColor(Formatting.GRAY) }
+                .append("<--".asText()
+                    .styled {
+                        it.withClickEvent(RunnableClickEvent {
+                            printMessage(
+                                command,
+                                previousPage,
+                                maxPage,
+                                commands
+                            )
+                        })
+                    }
+                    .styled {
+                        it.withHoverEvent(HoverEvent(HoverEvent.Action.SHOW_TEXT, command.result("previous")))
+                    }
+                )
+                .append("[$page]")
+                .append("-->".asText()
+                    .styled {
+                        it.withClickEvent(RunnableClickEvent { printMessage(command, nextPage, maxPage, commands) })
+                    }
+                    .styled {
+                        it.withHoverEvent(HoverEvent(HoverEvent.Action.SHOW_TEXT, command.result("next")))
+                    }
+                ),
+            metadata = MessageMetadata(id = "CommandHelp#Next")
+        )
+    }
+
 }

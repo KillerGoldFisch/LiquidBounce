@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,7 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.utils.entity
 
 import net.ccbluex.liquidbounce.utils.client.mc
@@ -25,12 +24,19 @@ import net.ccbluex.liquidbounce.utils.math.times
 import net.minecraft.client.world.ClientWorld
 import net.minecraft.entity.projectile.ArrowEntity
 import net.minecraft.entity.projectile.ProjectileUtil
+import net.minecraft.item.ItemStack
+import net.minecraft.item.Items
 import net.minecraft.util.hit.HitResult
 import net.minecraft.util.math.Box
 import net.minecraft.util.math.Vec3d
 import net.minecraft.world.RaycastContext
 
-class SimulatedArrow(val world: ClientWorld, var pos: Vec3d, var velocity: Vec3d, private val collideEntities: Boolean = true) {
+class SimulatedArrow(
+    val world: ClientWorld,
+    var pos: Vec3d,
+    var velocity: Vec3d,
+    private val collideEntities: Boolean = true
+) {
     var inGround = false
 
     fun tick(): HitResult? {
@@ -65,7 +71,8 @@ class SimulatedArrow(val world: ClientWorld, var pos: Vec3d, var velocity: Vec3d
     private fun updateCollision(pos: Vec3d, newPos: Vec3d): HitResult? {
         val world = this.world
 
-        val arrowEntity = ArrowEntity(this.world, this.pos.x, this.pos.y, this.pos.z)
+        val arrowEntity = ArrowEntity(this.world, this.pos.x, this.pos.y, this.pos.z, ItemStack(Items.ARROW),
+            null)
 
         // Get landing position
         val blockHitResult = world.raycast(
@@ -96,7 +103,9 @@ class SimulatedArrow(val world: ClientWorld, var pos: Vec3d, var velocity: Vec3d
                     +size
                 ).offset(pos).stretch(newPos.subtract(pos)).expand(1.0)
             ) {
-                if (!it.isSpectator && it.isAlive && (it.canHit() || arrowEntity != mc.player && it == arrowEntity)) {
+                val canBeHit = !it.isSpectator && it.isAlive
+
+                if (canBeHit && (it.canHit() || arrowEntity != mc.player && it == arrowEntity)) {
                     if (arrowEntity.isConnectedThroughVehicle(it)) return@getEntityCollision false
                 } else {
                     return@getEntityCollision false
@@ -118,5 +127,6 @@ class SimulatedArrow(val world: ClientWorld, var pos: Vec3d, var velocity: Vec3d
         return null
     }
 
+    @Suppress("FunctionOnlyReturningConstant")
     private fun isTouchingWater(): Boolean = false
 }

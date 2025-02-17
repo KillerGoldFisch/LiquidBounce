@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,94 +18,166 @@
  */
 package net.ccbluex.liquidbounce.script
 
+import com.mojang.blaze3d.systems.RenderSystem
 import net.ccbluex.liquidbounce.config.ConfigSystem
+import net.ccbluex.liquidbounce.features.module.modules.render.ModuleClickGui
 import net.ccbluex.liquidbounce.utils.client.logger
+import org.graalvm.polyglot.Engine
+import org.graalvm.polyglot.Source
 import java.io.File
-import java.io.FileFilter
 
+/**
+ * The ScriptManager allows to extend the client by loading supported scripts at runtime.
+ * Scripts can be written in various languages when installed through GraalVM
+ * and can interact with the client through the Script API.
+ *
+ * Scripts are stored in the scripts directory and can be organized in subdirectories when using a main script file.
+ */
 object ScriptManager {
 
-    // todo: add fabricmc mappings nashorn remapper
+    /**
+     * A list that holds all the loaded scripts.
+     */
+    val scripts = mutableSetOf<PolyglotScript>()
 
-    // Loaded scripts
-    val loadedScripts = mutableListOf<Script>()
-
-    // Store all of your scripts into this folder to get loaded
-    val scriptsRoot = File(ConfigSystem.rootFolder, "scripts").apply {
+    /**
+     * The root directory where all scripts are stored. This directory is created if it does not exist.
+     */
+    val root = File(ConfigSystem.rootFolder, "scripts").apply {
         if (!exists()) {
             mkdir()
         }
     }
 
-    /**
-     * Loads all scripts inside the scripts folder.
-     */
-    fun loadScripts() {
-        scriptsRoot.listFiles(FileFilter { it.name.endsWith(".js") })?.forEach(ScriptManager::loadScript)
+    init {
+        try {
+            // Initialize the script engine and log its version and supported languages.
+            val engine = Engine.create()
+            logger.info(
+                "[ScriptAPI] Engine Version: ${engine.version}, " +
+                    "Supported languages: [ ${engine.languages.keys.joinToString(", ")} ]"
+            )
+        } catch (e: Exception) {
+            logger.error("Failed to initialize the script engine.", e)
+        }
     }
 
     /**
-     * Unloads all scripts.
+     * Loads all scripts found in the scripts directory. This method scans the directory for script files
+     * and directories containing a main script file. It then loads and enables all found scripts.
      */
-    fun unloadScripts() {
-        loadedScripts.forEach(Script::disable)
-        loadedScripts.clear()
+    fun loadAll() {
+        root.listFiles { file ->
+            Source.findLanguage(file) != null || file.isDirectory
+        }?.forEach { file ->
+            if (file.isDirectory) {
+                // If a directory is found, look for a main script file inside it.
+                val mainFile = file.listFiles { dirFile ->
+                    dirFile.nameWithoutExtension == "main" && Source.findLanguage(dirFile) != null
+                }?.firstOrNull()
+
+                if (mainFile != null) {
+                    loadCatched(mainFile)
+                } else {
+                    logger.warn("Unable to find main inside the directory ${file.name}.")
+                }
+            } else {
+                // If the file is a script, load it immediately.
+                loadCatched(file)
+            }
+        }
+
+        // After loading, enable all the scripts.
+        enableAll()
     }
 
     /**
-     * Loads a script from a file.
+     * Unloads all currently loaded scripts. This method disables each script and clears the list of loaded scripts.
      */
-    fun loadScript(file: File) = runCatching {
-        val script = Script(file).also { loadedScripts += it }
-        script.initScript()
+    fun unloadAll() {
+        scripts.forEach(PolyglotScript::disable)
+        scripts.forEach(PolyglotScript::close)
+        scripts.clear()
+    }
 
-        script
+    /**
+     * Loads a script from a file and catches any exceptions that occur during the loading process.
+     * This ensures that a single faulty script does not prevent other scripts from being loaded.
+     *
+     * @param file The script file to load.
+     */
+    private fun loadCatched(file: File) = runCatching {
+        loadScript(file)
     }.onFailure {
         logger.error("Unable to load script ${file.name}.", it)
     }.getOrNull()
 
     /**
-     * Enables all scripts.
+     * Loads a script from a file. This method creates a new Script object, initializes it, and adds it to the list
+     * of loaded scripts.
+     *
+     * @param file The script file to load.
+     * @param language The language of the script. If not specified, it is inferred from the file.
+     * @return The loaded script.
      */
-    fun enableScripts() = loadedScripts.forEach(Script::enable)
+    fun loadScript(
+        file: File,
+        language: String = Source.findLanguage(file),
+        debugOptions: ScriptDebugOptions = ScriptDebugOptions()
+    ): PolyglotScript {
+        val script = PolyglotScript(language, file, debugOptions)
+        script.initScript()
 
-    /**
-     * Disables all scripts.
-     */
-    fun disableScripts() = loadedScripts.forEach(Script::disable)
-
-    /**
-     * Imports a script.
-     * @param file JavaScript file to be imported.
-     */
-    fun importScript(file: File) {
-        val scriptFile = File(scriptsRoot, file.name)
-        file.copyTo(scriptFile)
-
-        loadScript(scriptFile)
-        logger.info("Successfully imported script '${scriptFile.name}'.")
+        scripts += script
+        return script
     }
 
     /**
-     * Deletes a script.
-     * @param script Script to be deleted.
+     * Unloads a specific script. This method disables the script and removes it from the list of loaded scripts.
+     *
+     * @param script The script to unload.
      */
-    fun deleteScript(script: Script) {
+    fun unloadScript(script: PolyglotScript) {
         script.disable()
-        loadedScripts.remove(script)
-        script.scriptFile.delete()
-
-        logger.info("Successfully deleted script '${script.scriptFile.name}'.")
+        script.close()
+        scripts.remove(script)
     }
 
     /**
-     * Reloads all scripts.
+     * Enables all loaded scripts. This method iterates over the list of loaded scripts and enables each one.
      */
-    fun reloadScripts() {
-        disableScripts()
-        unloadScripts()
-        loadScripts()
-        enableScripts()
+    fun enableAll() {
+        scripts.forEach(PolyglotScript::enable)
+
+        // Reload the ClickGUI to update the module list.
+        RenderSystem.recordRenderCall {
+            ModuleClickGui.reloadView()
+        }
+    }
+
+    /**
+     * Disables all loaded scripts. This method iterates over the list of loaded scripts and disables each one.
+     */
+    fun disableAll() {
+        scripts.forEach(PolyglotScript::disable)
+    }
+
+    /**
+     * Reloads all scripts. This method unloads all currently loaded scripts, loads them again from the scripts
+     * directory, and then enables them. It logs a message upon successful completion.
+     */
+    fun reload() {
+        // Unload
+        try {
+            disableAll()
+            unloadAll()
+        } catch (e: Exception) {
+            logger.error("Failed to unload scripts.", e)
+        }
+
+        // Load
+        loadAll()
+        enableAll()
 
         logger.info("Successfully reloaded scripts.")
     }

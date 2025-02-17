@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,19 +18,16 @@
  */
 package net.ccbluex.liquidbounce.features.module.modules.render
 
-import net.ccbluex.liquidbounce.config.Choice
-import net.ccbluex.liquidbounce.config.ChoiceConfigurable
+import net.ccbluex.liquidbounce.config.types.Choice
+import net.ccbluex.liquidbounce.config.types.ChoiceConfigurable
 import net.ccbluex.liquidbounce.event.events.WorldRenderEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
-import net.ccbluex.liquidbounce.render.BoxesRenderer
+import net.ccbluex.liquidbounce.features.module.ClientModule
+import net.ccbluex.liquidbounce.render.*
 import net.ccbluex.liquidbounce.render.engine.Color4b
-import net.ccbluex.liquidbounce.render.renderEnvironmentForWorld
-import net.ccbluex.liquidbounce.render.utils.rainbow
-import net.ccbluex.liquidbounce.render.withPosition
 import net.ccbluex.liquidbounce.utils.entity.interpolateCurrentPosition
-import net.ccbluex.liquidbounce.utils.math.toVec3
+import net.minecraft.entity.Entity
 import net.minecraft.entity.ItemEntity
 import net.minecraft.entity.projectile.ArrowEntity
 import net.minecraft.util.math.Box
@@ -41,50 +38,61 @@ import net.minecraft.util.math.Box
  * Allows you to see dropped items through walls.
  */
 
-object ModuleItemESP : Module("ItemESP", Category.RENDER) {
+object ModuleItemESP : ClientModule("ItemESP", Category.RENDER) {
 
-    override val translationBaseKey: String
+    override val baseKey: String
         get() = "liquidbounce.module.itemEsp"
 
-    private val color by color("Color", Color4b(255, 179, 72, 255))
-    private val colorRainbow by boolean("Rainbow", false)
-
-    private val modes = choices("Mode", BoxMode, arrayOf(BoxMode))
+    private val modes = choices("Mode", OutlineMode, arrayOf(GlowMode, OutlineMode, BoxMode))
+    private val colorMode = choices("ColorMode", 0) {
+        arrayOf(
+            GenericStaticColorMode(it, Color4b(255, 179, 72, 255)),
+            GenericRainbowColorMode(it)
+        )
+    }
 
     private object BoxMode : Choice("Box") {
 
-        override val parent: ChoiceConfigurable
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
         private val box = Box(-0.125, 0.125, -0.125, 0.125, 0.375, 0.125)
 
+        @Suppress("unused")
         val renderHandler = handler<WorldRenderEvent> { event ->
             val matrixStack = event.matrixStack
 
-            val base = if (colorRainbow) rainbow() else color
-            val baseColor = base.alpha(50)
-            val outlineColor = base.alpha(100)
+            val base = getColor()
+            val baseColor = base.with(a = 50)
+            val outlineColor = base.with(a = 100)
 
-            val filtered = world.entities.filter { it is ItemEntity || it is ArrowEntity }
-
-            val boxRenderer = BoxesRenderer()
+            val filtered = world.entities.filter(::shouldRender)
 
             renderEnvironmentForWorld(matrixStack) {
-                for (entity in filtered) {
-                    val pos = entity.interpolateCurrentPosition(event.partialTicks).toVec3()
+                BoxRenderer.drawWith(this) {
+                    for (entity in filtered) {
+                        val pos = entity.interpolateCurrentPosition(event.partialTicks)
 
-                    withPosition(pos) {
-                        boxRenderer.drawBox(this, box, true)
+                        withPositionRelativeToCamera(pos) {
+                            drawBox(box, baseColor, outlineColor)
+                        }
                     }
                 }
-
-
-                boxRenderer.draw(this, baseColor, outlineColor)
-
-
             }
         }
-
     }
 
+    object GlowMode : Choice("Glow") {
+        override val parent: ChoiceConfigurable<Choice>
+            get() = modes
+    }
+
+    object OutlineMode : Choice("Outline") {
+        override val parent: ChoiceConfigurable<Choice>
+            get() = modes
+    }
+
+    fun shouldRender(it: Entity?) = it is ItemEntity || it is ArrowEntity
+
+    fun getColor() = this.colorMode.activeChoice.getColor(null)
 }

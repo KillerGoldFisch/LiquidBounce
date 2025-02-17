@@ -1,7 +1,25 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.misc.antibot.modes
 
-import net.ccbluex.liquidbounce.config.Choice
-import net.ccbluex.liquidbounce.config.ChoiceConfigurable
+import net.ccbluex.liquidbounce.config.types.Choice
+import net.ccbluex.liquidbounce.config.types.ChoiceConfigurable
 import net.ccbluex.liquidbounce.event.events.PacketEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.modules.misc.antibot.ModuleAntiBot
@@ -16,11 +34,11 @@ import java.util.*
  * Tested on: gamster.org and a private server with latest Intave as of 7/28/2022.
  */
 object IntaveHeavyAntiBotMode : Choice("IntaveHeavy"), ModuleAntiBot.IAntiBotMode {
-    override val parent: ChoiceConfigurable
+    override val parent: ChoiceConfigurable<*>
         get() = ModuleAntiBot.modes
 
-    private val suspectList = hashMapOf<UUID, Pair<Int, Long>>()
-    private val botList = ArrayList<UUID>()
+    private val suspectList = hashMapOf<UUID, SuspectInfo>()
+    private val botList = hashSetOf<UUID>()
 
     /**
      * ## Ping logic:
@@ -51,13 +69,8 @@ object IntaveHeavyAntiBotMode : Choice("IntaveHeavy"), ModuleAntiBot.IAntiBotMod
      */
     private fun handlePlayerRemove(packet: PlayerRemoveS2CPacket) {
         for (id in packet.profileIds) {
-            if (suspectList.containsKey(id)) {
-                suspectList.remove(id)
-            }
-
-            if (botList.contains(id)) {
-                botList.remove(id)
-            }
+            suspectList.remove(id)
+            botList.remove(id)
         }
     }
 
@@ -78,11 +91,10 @@ object IntaveHeavyAntiBotMode : Choice("IntaveHeavy"), ModuleAntiBot.IAntiBotMod
                 continue
             }
 
-            val pingSinceJoin = suspectList.getValue(entry.profileId).first
+            val pingSinceJoin = suspectList.getValue(entry.profileId).latency
 
             val deltaPing = pingSinceJoin - entry.latency
-            val deltaMS = System.currentTimeMillis() - suspectList.getValue(entry.profileId).second
-
+            val deltaMS = System.currentTimeMillis() - suspectList.getValue(entry.profileId).timestamp
 
             // Intave instantly sends this packet, but some servers might lag, so it might be delayed,
             // that's why the difference limit is 15 MS. The less the value, the lower the chances of producing
@@ -97,21 +109,26 @@ object IntaveHeavyAntiBotMode : Choice("IntaveHeavy"), ModuleAntiBot.IAntiBotMod
 
     private fun handlePlayerListAddPlayers(entries: MutableList<PlayerListS2CPacket.Entry>) {
         for (entry in entries) {
-            if (entry.latency < 2 || ModuleAntiBot.isGameProfileUnique(entry.profile)) {
+            val profile = entry.profile ?: continue
+
+            if (entry.latency < 2 || ModuleAntiBot.isGameProfileUnique(profile)) {
                 continue
             }
 
-            suspectList[entry.profileId] = Pair(entry.latency, System.currentTimeMillis())
+            suspectList[entry.profileId] = SuspectInfo(entry.latency, System.currentTimeMillis())
         }
     }
 
     override fun isBot(entity: PlayerEntity): Boolean {
-        return botList.contains(player.uuid)
+        return botList.contains(entity.uuid)
     }
 
     override fun reset() {
         suspectList.clear()
         botList.clear()
     }
+
+    @JvmRecord
+    data class SuspectInfo(val latency: Int, val timestamp: Long)
 
 }

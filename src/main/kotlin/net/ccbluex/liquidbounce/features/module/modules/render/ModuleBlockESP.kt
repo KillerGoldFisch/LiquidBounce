@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,24 +18,23 @@
  */
 package net.ccbluex.liquidbounce.features.module.modules.render
 
-import net.ccbluex.liquidbounce.config.Choice
-import net.ccbluex.liquidbounce.config.ChoiceConfigurable
+import net.ccbluex.liquidbounce.config.types.Choice
+import net.ccbluex.liquidbounce.config.types.ChoiceConfigurable
+import net.ccbluex.liquidbounce.event.events.DrawOutlinesEvent
 import net.ccbluex.liquidbounce.event.events.WorldRenderEvent
 import net.ccbluex.liquidbounce.event.handler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
-import net.ccbluex.liquidbounce.render.BoxesRenderer
+import net.ccbluex.liquidbounce.features.module.ClientModule
+import net.ccbluex.liquidbounce.render.*
 import net.ccbluex.liquidbounce.render.engine.Color4b
-import net.ccbluex.liquidbounce.render.engine.Vec3
-import net.ccbluex.liquidbounce.render.renderEnvironmentForWorld
-import net.ccbluex.liquidbounce.render.utils.rainbow
-import net.ccbluex.liquidbounce.render.withPosition
 import net.ccbluex.liquidbounce.utils.block.AbstractBlockLocationTracker
 import net.ccbluex.liquidbounce.utils.block.ChunkScanner
+import net.ccbluex.liquidbounce.utils.block.getState
+import net.ccbluex.liquidbounce.utils.inventory.findBlocksEndingWith
+import net.ccbluex.liquidbounce.utils.math.toVec3d
 import net.minecraft.block.BlockState
-import net.minecraft.block.Blocks
+import net.minecraft.client.util.math.MatrixStack
 import net.minecraft.util.math.BlockPos
-import net.minecraft.util.math.Box
 
 /**
  * BlockESP module
@@ -43,63 +42,138 @@ import net.minecraft.util.math.Box
  * Allows you to see selected blocks through walls.
  */
 
-object ModuleBlockESP : Module("BlockESP", Category.RENDER) {
+object ModuleBlockESP : ClientModule("BlockESP", Category.RENDER) {
 
-    private val modes = choices("Mode", Box, arrayOf(Box))
+    private val modes = choices("Mode", Glow, arrayOf(Box, Glow, Outline))
+    private val targets by blocks(
+        "Targets",
+        findBlocksEndingWith("_BED", "DRAGON_EGG").toHashSet()
+    ).onChange {
+        if (running) {
+            disable()
+            enable()
+        }
+        it
+    }
 
-    private val targetedBlocksSetting by blocks("Targets", hashSetOf(Blocks.DRAGON_EGG, Blocks.RED_BED))
-
-    private val color by color("Color", Color4b(255, 179, 72, 255))
-    private val colorRainbow by boolean("Rainbow", false)
+    private val colorMode = choices("ColorMode", 0) {
+        arrayOf(
+            MapColorMode(it),
+            GenericStaticColorMode(it, Color4b(255, 179, 72, 50)),
+            GenericRainbowColorMode(it)
+        )
+    }
 
     private object Box : Choice("Box") {
-        override val parent: ChoiceConfigurable
+        override val parent: ChoiceConfigurable<Choice>
             get() = modes
 
         private val outline by boolean("Outline", true)
 
-        // todo: use box of block, not hardcoded
-        private val box = Box(0.0, 0.0, 0.0, 1.0, 1.0, 1.0)
-
-
-
+        @Suppress("unused")
         val renderHandler = handler<WorldRenderEvent> { event ->
-
             val matrixStack = event.matrixStack
 
-            val base = if (colorRainbow) rainbow() else color
-            val baseColor = base.alpha(50)
-            val outlineColor = base.alpha(100)
-
-            val boxRenderer = BoxesRenderer()
-
-
-
-            renderEnvironmentForWorld(matrixStack) {
-
-                synchronized(BlockTracker.trackedBlockMap) {
-                    for (pos in BlockTracker.trackedBlockMap.keys) {
-                        val vec3 = Vec3(pos.x.toDouble(), pos.y.toDouble(), pos.z.toDouble())
-
-                        withPosition(vec3) {
-                            boxRenderer.drawBox(this, box, outline)
-
-                        }
-                    }
-                }
-
-                boxRenderer.draw(this, baseColor, outlineColor)
-
-
-
-
-
-
-
-                }
-
+            drawBoxMode(matrixStack, this.outline, false)
         }
 
+        fun drawBoxMode(matrixStack: MatrixStack, drawOutline: Boolean, fullAlpha: Boolean): Boolean {
+            val colorMode = colorMode.activeChoice
+
+            var dirty = false
+
+            renderEnvironmentForWorld(matrixStack) {
+                dirty = drawInternal(
+                    BlockTracker.trackedBlockMap.keys,
+                    colorMode,
+                    fullAlpha,
+                    drawOutline
+                )
+            }
+
+            return dirty
+        }
+
+        private fun WorldRenderEnvironment.drawInternal(
+            blocks: Set<BlockPos>,
+            colorMode: GenericColorMode<Pair<BlockPos, BlockState>>,
+            fullAlpha: Boolean,
+            drawOutline: Boolean
+        ): Boolean {
+            var dirty = false
+
+            BoxRenderer.drawWith(this) {
+                for (blockPos in blocks) {
+                    val blockState = blockPos.getState() ?: continue
+
+                    if (blockState.isAir) {
+                        continue
+                    }
+
+                    val outlineShape = blockState.getOutlineShape(world, blockPos)
+                    val boundingBox = if (outlineShape.isEmpty) {
+                        FULL_BOX
+                    } else {
+                        outlineShape.boundingBox
+                    }
+
+                    var color = colorMode.getColor(Pair(blockPos, blockState))
+
+                    if (fullAlpha) {
+                        color = color.with(a = 255)
+                    }
+
+                    withPositionRelativeToCamera(blockPos.toVec3d()) {
+                        drawBox(
+                            boundingBox,
+                            faceColor = color,
+                            outlineColor = color.with(a = 150).takeIf { drawOutline }
+                        )
+                    }
+
+                    dirty = true
+                }
+            }
+
+            return dirty
+        }
+    }
+
+    private object Glow : Choice("Glow") {
+        override val parent: ChoiceConfigurable<Choice>
+            get() = modes
+
+        @Suppress("unused")
+        val renderHandler = handler<DrawOutlinesEvent> { event ->
+            if (event.type != DrawOutlinesEvent.OutlineType.MINECRAFT_GLOW) {
+                return@handler
+            }
+
+            val dirty = Box.drawBoxMode(event.matrixStack, drawOutline = false, fullAlpha = true)
+
+            if (dirty) {
+                event.markDirty()
+            }
+        }
+
+    }
+
+    private object Outline : Choice("Outline") {
+        override val parent: ChoiceConfigurable<Choice>
+            get() = modes
+
+        @Suppress("unused")
+        val renderHandler = handler<DrawOutlinesEvent> { event ->
+            if (event.type != DrawOutlinesEvent.OutlineType.INBUILT_OUTLINE) {
+                return@handler
+            }
+
+            val dirty = Box.drawBoxMode(event.matrixStack, drawOutline = false, fullAlpha = true)
+
+            if (dirty) {
+                event.markDirty()
+            }
+        }
     }
 
     override fun enable() {
@@ -114,7 +188,7 @@ object ModuleBlockESP : Module("BlockESP", Category.RENDER) {
 
     private object BlockTracker : AbstractBlockLocationTracker<TrackedState>() {
         override fun getStateFor(pos: BlockPos, state: BlockState): TrackedState? {
-            return if (targetedBlocksSetting.contains(state.block)) {
+            return if (!state.isAir && targets.contains(state.block)) {
                 TrackedState
             } else {
                 null

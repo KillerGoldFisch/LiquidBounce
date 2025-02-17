@@ -1,3 +1,21 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.render.nametags
 
 import com.mojang.blaze3d.systems.RenderSystem
@@ -11,12 +29,12 @@ import net.minecraft.client.render.VertexFormat
 import net.minecraft.item.ItemStack
 import org.lwjgl.opengl.GL11
 
-
 private const val NAMETAG_PADDING: Int = 5
 private const val ITEM_SIZE: Int = 20
 private const val ITEM_SCALE: Float = 1.0F
 
 class NametagRenderer {
+
     private val quadBuffers =
         RenderBufferBuilder(
             VertexFormat.DrawMode.QUADS,
@@ -32,35 +50,31 @@ class NametagRenderer {
 
     private val fontBuffers = FontRendererBuffers()
 
-    fun drawNametag(
-        env: RenderEnvironment,
-        info: NametagInfo,
-        pos: Vec3,
-    ) {
-        val c = Fonts.DEFAULT_FONT_SIZE.toFloat()
+    fun drawNametag(env: RenderEnvironment, nametag: Nametag, pos: Vec3) = with(env) {
+        val fontSize = FontManager.DEFAULT_FONT_SIZE
 
-        val scale = 1.0F / (c * 0.15F) * ModuleNametags.scale
+        val scale = 1f / (fontSize * 0.15f) * ModuleNametags.scale
 
-        env.matrixStack.push()
-        env.matrixStack.translate(pos.x, pos.y, pos.z)
-        env.matrixStack.scale(scale, scale, 1.0F)
+        matrixStack.push()
+        matrixStack.translate(pos.x, pos.y, pos.z)
+        matrixStack.scale(scale, scale, 1f)
 
         val x =
             ModuleNametags.fontRenderer.draw(
-                info.text,
-                0.0F,
-                0.0F,
+                ModuleNametags.fontRenderer.process(nametag.text),
+                0f,
+                0f,
                 shadow = true,
-                z = 0.001F,
+                z = 0.001f,
             )
 
         // Make the model view matrix center the text when rendering
-        env.matrixStack.translate(-x * 0.5F, -ModuleNametags.fontRenderer.height * 0.5F, 0.00F)
+        matrixStack.translate(-x * 0.5f, -ModuleNametags.fontRenderer.height * 0.5f, 0f)
 
         ModuleNametags.fontRenderer.commit(env, fontBuffers)
 
-        val q1 = Vec3(-0.1F * c, ModuleNametags.fontRenderer.height * -0.1F, 0.0F)
-        val q2 = Vec3(x + 0.2F * c, ModuleNametags.fontRenderer.height * 1.1F, 0.0F)
+        val q1 = Vec3(-0.1f * fontSize, ModuleNametags.fontRenderer.height * -0.1f, 0f)
+        val q2 = Vec3(x + 0.2f * fontSize, ModuleNametags.fontRenderer.height * 1.1f, 0f)
 
         quadBuffers.drawQuad(env, q1, q2)
 
@@ -68,23 +82,39 @@ class NametagRenderer {
             lineBuffers.drawQuadOutlines(env, q1, q2)
         }
 
-        drawItemList(pos, info.items)
+        if (ModuleNametags.ShowOptions.items) {
+            drawItemList(pos, nametag.items)
+        }
 
-        env.matrixStack.pop()
+        matrixStack.pop()
     }
 
-    private fun drawItemList(
-        pos: Vec3,
-        itemsToRender: List<ItemStack?>,
-    ) {
+    private fun drawItemList(pos: Vec3, itemsToRender: List<ItemStack?>) {
         val dc = DrawContext(mc, mc.bufferBuilders.entityVertexConsumers)
 
         dc.matrices.translate(pos.x, pos.y - NAMETAG_PADDING, pos.z)
-        dc.matrices.scale(ITEM_SCALE, ITEM_SCALE, 1.0F)
+        dc.matrices.scale(ITEM_SCALE * ModuleNametags.scale, ITEM_SCALE * ModuleNametags.scale, 1.0F)
         dc.matrices.translate(-itemsToRender.size * ITEM_SIZE / 2.0F, -ITEM_SIZE.toFloat(), 0.0F)
 
+        dc.fill(
+            0,
+            0,
+            itemsToRender.size * ITEM_SIZE,
+            ITEM_SIZE,
+            Color4b.BLACK.with(a = 0).toARGB()
+        )
+
+        dc.matrices.translate(0.0F, 0.0F, 100.0F)
+
+        val itemInfo = ModuleNametags.ShowOptions.itemInfo
         itemsToRender.forEachIndexed { index, itemStack ->
-            dc.drawItem(itemStack, index * ITEM_SIZE, 0)
+            itemStack ?: return@forEachIndexed
+
+            val x = index * ITEM_SIZE
+            dc.drawItem(itemStack, x, 0)
+            if (itemInfo) {
+                dc.drawStackOverlay(mc.textRenderer, itemStack, x, 0)
+            }
         }
     }
 
@@ -93,14 +123,22 @@ class NametagRenderer {
         GL11.glEnable(GL11.GL_DEPTH_TEST)
 
         RenderSystem.enableBlend()
-        env.withColor(Color4b(0, 0, 0, 127)) {
+        RenderSystem.blendFuncSeparate(
+            GL11.GL_SRC_ALPHA,
+            GL11.GL_ONE_MINUS_SRC_ALPHA,
+            GL11.GL_ONE,
+            GL11.GL_ZERO
+        )
+
+        env.withColor(Color4b(0, 0, 0, 120)) {
             quadBuffers.draw()
         }
         env.withColor(Color4b(0, 0, 0, 255)) {
             lineBuffers.draw()
         }
         env.withColor(Color4b.WHITE) {
-            fontBuffers.draw(ModuleNametags.fontRenderer)
+            fontBuffers.draw()
         }
     }
+
 }

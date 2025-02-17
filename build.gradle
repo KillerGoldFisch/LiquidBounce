@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,183 +17,267 @@
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
 
+
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-plugins {
-    id 'fabric-loom'
-    id 'org.jetbrains.kotlin.jvm'
-    id 'com.github.johnrengelman.shadow' version '7.1.2'
-    id 'org.jlleitschuh.gradle.ktlint' version '12.0.2'
-    id 'com.gorylenko.gradle-git-properties' version '2.4.1'
-    id "io.gitlab.arturbosch.detekt" version "1.23.4"
-    id "com.github.node-gradle.node" version "7.0.1"
-}
+def getContributors(repoOwner, repoName) {
+    def url = "https://api.github.com/repos/${repoOwner}/${repoName}/stats/contributors"
+    def connection = (HttpURLConnection) new URI(url).toURL().openConnection()
 
-ktlint {
-    enableExperimentalRules = true
-    ignoreFailures = true
-    disabledRules = ['no-wildcard-imports', 'no-blank-line-before-rbrace']
+    connection.requestMethod = "GET"
+    connection.connectTimeout = 5000
+    connection.readTimeout = 5000
 
-    reporters {
-        reporter 'plain'
-        reporter 'checkstyle'
+    connection.setRequestProperty("User-Agent", "LiquidBounce-App")
+
+    if (200 <= connection.responseCode && connection.responseCode <= 299) {
+        def response = connection.inputStream.text
+        def json = new JsonSlurper().parseText(response)
+        return json[]
+                .collect { it['author']['login'] }
+                .findAll { !(it as String).contains("dependabot") }
+                .reversed()
+
+    } else {
+        def error = connection.errorStream?.text ?: "No response details"
+        logger.log(LogLevel.ERROR, "Failed to collect contributors, github api responsed invalid status code: ${connection.responseCode}\n${error}")
+        return []
     }
-
 }
 
-sourceCompatibility = JavaVersion.VERSION_17
-targetCompatibility = JavaVersion.VERSION_17
 
-archivesBaseName = project.archives_base_name
-version = project.mod_version
-group = project.maven_group
+plugins {
+    id "fabric-loom"
+    id "org.jetbrains.kotlin.jvm"
+    id "com.gorylenko.gradle-git-properties" version "2.4.2"
+    id "io.gitlab.arturbosch.detekt" version "1.23.6"
+    id "com.github.node-gradle.node" version "7.1.0"
+    id "org.jetbrains.dokka" version "1.9.10"
+}
 
-loom {
-    accessWidenerPath = file('src/main/resources/liquidbounce.accesswidener')
+base {
+    archivesBaseName = project.archives_base_name
+    version = project.mod_version
+    group = project.maven_group
+}
+
+configurations {
+    includeDependency
+    includeModDependency
+
+    include.extendsFrom includeModDependency
+    modImplementation.extendsFrom includeModDependency
+    modCompileOnlyApi.extendsFrom includeModDependency
 }
 
 repositories {
     mavenCentral()
     mavenLocal()
-    maven { url = 'https://maven.fabricmc.net/' }
-    maven { url = 'https://jitpack.io' }
+    maven { url = "https://maven.fabricmc.net/" }
     maven {
-        name = 'TerraformersMC'
-        url = 'https://maven.terraformersmc.com/'
+        name = "Jitpack"
+        url = "https://jitpack.io"
     }
     maven {
-        name = 'ViaVersion'
-        url = 'https://repo.viaversion.com/'
+        name = "TerraformersMC"
+        url = "https://maven.terraformersmc.com/"
     }
-
+    maven {
+        name = "ViaVersion"
+        url = "https://repo.viaversion.com/"
+    }
     maven {
         name = "modrinth"
         url = "https://api.modrinth.com/maven"
     }
+    maven {
+        name = "OpenCollab Snapshots"
+        url = "https://repo.opencollab.dev/maven-snapshots/"
+    }
+    maven {
+        name = "Lenni0451"
+        url = "https://maven.lenni0451.net/everything"
+    }
+}
+
+loom {
+    accessWidenerPath = file("src/main/resources/liquidbounce.accesswidener")
 }
 
 dependencies {
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.8.1'
-
     // Minecraft
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
 
-    // Libraries (required mods)
-
+    // Fabric
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
     modImplementation "net.fabricmc:fabric-language-kotlin:${project.fabric_kotlin_version}"
 
-    implementation "com.viaversion:viaversion:4.8.1"
-    implementation "net.raphimc:ViaLoader:2.2.10"
-    // 2.9.5 requires Minecraft 1.20.2 - we are currently on 1.20.1
-    //  modImplementation ("de.florianmichael:viafabricplus:2.9.5") {
-    //      transitive = false
-    // }
-
     // Recommended mods (on IDE)
     modRuntimeOnly "com.terraformersmc:modmenu:${project.mod_menu_version}"
     modImplementation "maven.modrinth:sodium:${project.sodium_version}"
+    modImplementation "maven.modrinth:lithium:${project.lithium_version}"
 
-    // fix nullable imports
-    implementation 'com.google.code.findbugs:jsr305:3.0.2'
+    // ViaFabricPlus
+    modImplementation "com.viaversion:viafabricplus-api:${project.viafabricplus_version}"
+    modRuntimeOnly "com.viaversion:viafabricplus:${project.viafabricplus_version}"
 
-    // Client libraries
-    implementation('com.thealtening.api:api:4.1.0') {
-        exclude group: 'com.google.code.gson', module: 'gson'
+    // Minecraft Authlib
+    includeDependency ("com.github.CCBlueX:mc-authlib:${project.mc_authlib_version}") {
+        exclude group: "com.google.code.gson", module: "gson"
+        exclude group: "org.apache.logging.log4j", module: "log4j-core"
+        exclude group: "org.apache.logging.log4j", module: "log4j-api"
+        exclude group: "org.apache.logging.log4j", module: "log4j-slf4j-impl"
+        exclude group: "org.slf4j", module: "slf4j-api"
+        exclude group: "com.mojang", module: "authlib"
+        exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib"
     }
 
-    implementation 'com.github.CCBlueX:Elixir:1.2.6'
+    // JCEF Support
+    includeModDependency ("com.github.CCBlueX:mcef:${project.mcef_version}") {
+        exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib"
+    }
+    includeDependency "org.apache.commons:commons-compress:1.27.1"
+    includeDependency ("com.github.CCBlueX:netty-httpserver:2.1.1") {
+        exclude group: "io.netty", module: "netty-all"
+        exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib"
+    }
 
-    implementation 'com.labymedia:ultralight-java-base:0.4.12'
-    implementation 'com.labymedia:ultralight-java-databind:0.4.12'
-    implementation 'com.labymedia:ultralight-java-gpu:0.4.12'
-    implementation 'com.labymedia:ultralight-java-glfw-opengl-util:0.4.12'
+    // Discord RPC Support
+    includeDependency "com.github.CCBlueX:DiscordIPC:4.0.0"
 
-    implementation 'org.graalvm.sdk:graal-sdk:23.0.2'
-    implementation 'org.graalvm.truffle:truffle-api:23.0.2'
-    implementation 'org.graalvm.js:js:23.0.2'
+    // ScriptAPI
+    includeDependency "net.fabricmc:tiny-mappings-parser:0.3.0+build.17"
+    includeDependency "org.graalvm.polyglot:polyglot:24.0.2"
+    includeDependency "org.graalvm.polyglot:js-community:24.0.2"
+    includeDependency "org.graalvm.polyglot:tools-community:24.0.2"
+//    includeDependency "org.graalvm.polyglot:python-community:24.0.2"
+//    includeDependency "org.graalvm.polyglot:wasm-community:24.0.2"
+//    includeDependency "org.graalvm.polyglot:java-community:24.0.2"
+//    includeDependency "org.graalvm.polyglot:ruby-community:24.0.2"
+//    includeDependency "org.graalvm.polyglot:llvm-native-community:24.0.2"
 
-    runtimeOnly 'org.graalvm.tools:profiler:23.0.1'
-    runtimeOnly 'org.graalvm.tools:chromeinspector:23.0.1'
+    // HTTP library
+    includeDependency ("com.squareup.okhttp3:okhttp:5.0.0-alpha.14") {
+        exclude group: "org.jetbrains.kotlin", module: "kotlin-stdlib"
+    }
 
-    // https://mvnrepository.com/artifact/io.netty/netty-codec
-    implementation 'io.netty:netty-codec:4.1.82.Final'
-    // https://mvnrepository.com/artifact/io.netty/netty-codec-http
-    implementation 'io.netty:netty-codec-http:4.1.82.Final'
-    // https://mvnrepository.com/artifact/io.netty/netty-handler-proxy
-    implementation 'io.netty:netty-handler-proxy:4.1.82.Final'
-    // https://mvnrepository.com/artifact/io.netty/netty-codec-socks
-    implementation 'io.netty:netty-codec-socks:4.1.82.Final'
+    // SOCKS5 Proxy Support
+    includeDependency ("io.netty:netty-handler-proxy:4.1.97.Final") {
+        exclude group: "io.netty", module: "netty-common"
+        exclude group: "io.netty", module: "netty-buffer"
+        exclude group: "io.netty", module: "netty-transport"
+        exclude group: "io.netty", module: "netty-codec"
+    }
 
+    // Update Checker
+    includeDependency "com.vdurmont:semver4j:3.1.0"
 
-    implementation 'com.vdurmont:semver4j:3.1.0'
+    // Name Protect
+    includeDependency "org.ahocorasick:ahocorasick:0.6.3"
 
     // Test libraries
+    testImplementation "org.junit.jupiter:junit-jupiter:5.11.3"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.0'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    // Fix nullable annotations
+    compileOnly "com.google.code.findbugs:jsr305:3.0.2"
+
+    afterEvaluate {
+        configurations.includeDependency.incoming.resolutionResult.allDependencies.each {
+            dependencies.include(dependencies.implementation(dependencies.compileOnlyApi(it.requested.toString()) {
+                transitive = false
+            }))
+        }
+    }
 }
 
 processResources {
-    inputs.property 'version', project.version
+    String contributors = JsonOutput.prettyPrint(JsonOutput.toJson(getContributors("CCBlueX", "LiquidBounce")))
 
-    inputs.property 'minecraft_version', minecraft_version
-    inputs.property 'fabric_version', fabric_version
-    inputs.property 'loader_version', loader_version
-    inputs.property 'fabric_kotlin_version', fabric_kotlin_version
+    inputs.property "version", project.version
 
-    filesMatching('fabric.mod.json') {
+    inputs.property "minecraft_version", minecraft_version
+    inputs.property "fabric_version", fabric_version
+    inputs.property "loader_version", loader_version
+    inputs.property "min_loader_version", min_loader_version
+    inputs.property "fabric_kotlin_version", fabric_kotlin_version
+    inputs.property "viafabricplus_version", viafabricplus_version
+    inputs.property "contributors", contributors
+
+    filesMatching("fabric.mod.json") {
         expand([
                 version              : project.version,
                 minecraft_version    : minecraft_version,
                 fabric_version       : fabric_version,
                 loader_version       : loader_version,
-                fabric_kotlin_version: fabric_kotlin_version
+                min_loader_version   : min_loader_version,
+                contributors         : contributors,
+                fabric_kotlin_version: fabric_kotlin_version,
+                viafabricplus_version: viafabricplus_version
         ])
     }
 }
 
 // The following code will include the theme into the build
 
-tasks.register('npmInstallTheme', NpmTask) {
-    workingDir = file('src-theme')
-    args = ['i']
+tasks.register("npmInstallTheme", NpmTask) {
+    workingDir = file("src-theme")
+    args = ["i"]
     doLast {
-        println 'Successfully installed dependencies for theme'
+        println "Successfully installed dependencies for theme"
     }
 
-    // Incremental stuff
-    inputs.files('src-theme/package.json', 'src-theme/package-lock.json')
+    inputs.files("src-theme/package.json", "src-theme/package-lock.json")
     outputs.dir("src-theme/node_modules")
 }
 
-tasks.register('bundleTheme', NodeTask) {
-    dependsOn 'npmInstallTheme'
-    workingDir = file('src-theme')
-    script = file('src-theme/bundle.js')
+tasks.register("buildTheme", NpmTask) {
+    dependsOn "npmInstallTheme"
+    workingDir = file("src-theme")
+    args = ["run", "build"]
     doLast {
-        println 'Successfully attached theme to build'
+        println "Successfully build theme"
+    }
+
+    inputs.files(
+            "src-theme/package.json",
+            "src-theme/package-lock.json",
+            "src-theme/bundle.cjs",
+            "src-theme/rollup.config.js"
+    )
+    inputs.dir("src-theme/src")
+    outputs.dir("src-theme/dist")
+}
+
+tasks.register("bundleTheme", NodeTask) {
+    dependsOn "buildTheme"
+    workingDir = file("src-theme")
+    script = file("src-theme/bundle.cjs")
+    doLast {
+        println "Successfully attached theme to build"
     }
 
     // Incremental stuff
-    inputs.files('src-theme/package.json', 'src-theme/package-lock.json')
-    inputs.dir(fileTree("src-theme/altmanager/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/clickgui/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/customize/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/hud/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/proxymanager/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/shared_res/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/splashscreen/").exclude("**/build"))
-    inputs.dir(fileTree("src-theme/title/").exclude("**/build"))
-    outputs.files('src-theme/resources/assets/liquidbounce/default_theme.zip')
+    inputs.files(
+            "src-theme/package.json",
+            "src-theme/package-lock.json",
+            "src-theme/bundle.cjs",
+            "src-theme/rollup.config.js"
+    )
+    inputs.dir("src-theme/src")
+    inputs.dir("src-theme/public")
+    inputs.dir("src-theme/dist")
+    outputs.files("src-theme/resources/assets/liquidbounce/default_theme.zip")
 }
 
 sourceSets {
     main {
         resources {
-            srcDirs 'src-theme/resources'
+            srcDirs "src-theme/resources"
         }
     }
 }
@@ -208,18 +292,18 @@ tasks.withType(JavaCompile).configureEach {
     // this fixes some edge cases with special characters not displaying correctly
     // see http://yodaconditions.net/blog/fix-for-java-file-encoding-problems-with-gradle.html
     // If Javadoc is generated, this must be specified in that task too.
-    it.options.encoding = 'UTF-8'
+    it.options.encoding = "UTF-8"
 
-    // Minecraft 1.18 upwards uses Java 17.
-    it.options.release = 17
+    // Minecraft 1.20.5 upwards uses Java 17.
+    it.options.release = 21
 }
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
+    dependsOn(tasks.named("genSources"))
 }
 
 detekt {
-    toolVersion = "1.23.1"
     config.setFrom(file("${rootProject.projectDir}/config/detekt/detekt.yml"))
     buildUponDefaultConfig = true
     baseline = file("${rootProject.projectDir}/config/detekt/baseline.xml")
@@ -239,55 +323,80 @@ task detektProjectBaseline(type: io.gitlab.arturbosch.detekt.DetektCreateBaselin
     exclude("**/build/**")
 }
 
+tasks.register("verifyI18nJsonKeys") {
+    def baselineFileName = "en_us.json"
+
+    group = "verification"
+    description = "Compare i18n JSON files with ${baselineFileName} as the baseline and report missing keys."
+
+    def i18nDir = file("src/main/resources/resources/liquidbounce/lang")
+
+    doLast {
+        if (!i18nDir.exists() || !i18nDir.isDirectory()) {
+            throw new GradleException("The specified directory ${i18nDir} does not exist or is not a directory.")
+        }
+
+        def baselineFile = new File(i18nDir, baselineFileName)
+        if (!baselineFile.exists()) {
+            throw new GradleException("Baseline file ${baselineFileName} not found in ${i18nDir}.")
+        }
+
+        def baseline = new JsonSlurper().parse(baselineFile)
+
+        i18nDir.eachFile { file ->
+            if (file.name.endsWith(".json") && file.name != baselineFileName) {
+                def currentFile = new JsonSlurper().parse(file)
+
+                def missingKeys = baseline.keySet() - currentFile.keySet()
+
+                if (missingKeys.isEmpty()) {
+                    println "${file.name} is complete. No missing keys."
+                } else {
+                    def limitedMissingKeys = missingKeys.take(5)
+                    def output = limitedMissingKeys.join(', ')
+                    if (missingKeys.size() > 5) {
+                        output += ", ..."
+                    }
+                    println "${file.name} is missing the following keys (${missingKeys.size()}): ${output}"
+                }
+            }
+        }
+    }
+}
+
 java {
     // Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
     // if it is present.
     // If you remove this line, sources will not be generated.
     withSourcesJar()
+
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
 }
 
 compileKotlin {
     compilerOptions {
         suppressWarnings = true
-        jvmTarget = JvmTarget.JVM_17
-    }
-}
-
-shadowJar {
-    archiveClassifier.set('shadow')
-
-    // Natives are going to be downloaded from our cloud
-    exclude 'native-binaries/*'
-
-    dependencies {
-        include(dependency('com.labymedia:ultralight-java-base'))
-        include(dependency('com.labymedia:ultralight-java-databind'))
-        include(dependency('com.labymedia:ultralight-java-gpu'))
-        include(dependency('com.labymedia:ultralight-java-glfw-opengl-util'))
-        include(dependency('com.thealtening.api:api'))
-        include(dependency('com.github.CCBlueX:Elixir'))
-        include(dependency('org.graalvm.sdk:graal-sdk:23.0.2'))
-        include(dependency('org.graalvm.truffle:truffle-api:23.0.2'))
-        include(dependency('org.graalvm.js:js:23.0.2'))
-        include(dependency('io.netty:netty-codec'))
-        include(dependency('io.netty:netty-codec-http'))
-        include(dependency('io.netty:netty-handler-proxy'))
-        include(dependency('io.netty:netty-codec-socks'))
-        include(dependency('com.vdurmont:semver4j:3.1.0'))
+        jvmTarget = JvmTarget.JVM_21
     }
 }
 
 jar {
-    from 'LICENSE'
+    // Rename the project"s license file to LICENSE_<project_name> to avoid conflicts
+    from("LICENSE") {
+        rename {
+            "${it}_${project.archives_base_name}"
+        }
+    }
+
+    from(configurations.mappings.collect { zipTree(it) }) {
+        include "mappings/mappings.tiny"
+    }
 }
 
-remapJar {
-    inputFile = shadowJar.archiveFile
-}
-
-tasks.register('copyZipInclude', Copy) {
-    from 'zip_include/'
-    into 'build/libs/zip'
+tasks.register("copyZipInclude", Copy) {
+    from "zip_include/"
+    into "build/libs/zip"
 }
 
 sourcesJar.dependsOn bundleTheme

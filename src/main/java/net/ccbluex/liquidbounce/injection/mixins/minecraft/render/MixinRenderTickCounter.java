@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,20 +26,21 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-@Mixin(RenderTickCounter.class)
+@Mixin(RenderTickCounter.Dynamic.class)
 public class MixinRenderTickCounter {
 
     @Shadow
-    public float lastFrameDuration;
+    private float lastFrameDuration;
 
     /**
      * Hook timer speed to modify frame duration
      */
-    @Inject(method = "beginRenderTick", at = @At(value = "FIELD", target = "Lnet/minecraft/client/render/RenderTickCounter;lastFrameDuration:F", shift = At.Shift.AFTER))
+    @Inject(method = "beginRenderTick(J)I", at = @At(value = "FIELD", target = "Lnet/minecraft/client/render/RenderTickCounter$Dynamic;lastFrameDuration:F", shift = At.Shift.AFTER))
     private void hookTimer(CallbackInfoReturnable<Integer> callback) {
         float customTimer = Timer.INSTANCE.getTimerSpeed();
-        if (customTimer > 0)
+        if (customTimer > 0) {
             lastFrameDuration *= customTimer;
+        }
     }
 
 }

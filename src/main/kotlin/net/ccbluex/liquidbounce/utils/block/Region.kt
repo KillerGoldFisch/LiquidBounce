@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,34 +16,61 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.utils.block
 
 import net.ccbluex.liquidbounce.utils.client.mc
+import net.ccbluex.liquidbounce.utils.kotlin.contains
 import net.minecraft.util.math.BlockPos
+import net.minecraft.util.math.Box
+import net.minecraft.util.math.Vec3d
 import net.minecraft.util.math.Vec3i
-import java.lang.Integer.max
-import java.lang.Integer.min
+import net.minecraft.world.chunk.Chunk
+import kotlin.math.max
+import kotlin.math.min
 
-class Region(from: BlockPos, to: BlockPos) {
+@Suppress("detekt:TooManyFunctions")
+class Region(from: BlockPos, to: BlockPos) : ClosedRange<BlockPos>, Iterable<BlockPos> by BlockPos.iterate(from, to) {
+
+    override val endInclusive: BlockPos
+        get() = this.to
+
+    override val start: BlockPos
+        get() = this.from
 
     companion object {
+        // the Region is a closed range so this is not empty actually
         val EMPTY: Region = Region(BlockPos.ORIGIN, BlockPos.ORIGIN)
 
         fun quadAround(pos: BlockPos, xz: Int, y: Int): Region {
-            assert(xz > 0 && y > 0)
-
-            return Region(pos.subtract(Vec3i(xz, y, xz)), pos.add(Vec3i(xz + 1, y + 1, xz + 1)))
+            return Region(pos.add(-xz, -y, -xz), pos.add(xz, y, xz))
         }
 
-        fun fromChunkPosition(x: Int, z: Int): Region {
-            val from = BlockPos(x * 16, 0, z * 16)
-
-            return Region(from, from.add(BlockPos(16, mc.world!!.height, 16)))
+        fun from(blockPos: BlockPos): Region {
+            return Region(blockPos, blockPos)
         }
 
-        fun fromBlockPos(blockPos: BlockPos): Region {
-            return Region(blockPos, blockPos.add(BlockPos(1, 1, 1)))
+        fun from(chunk: Chunk): Region {
+            val pos = chunk.pos
+            return Region(
+                BlockPos(pos.x shl 4, chunk.bottomY, pos.z shl 4),
+                BlockPos(pos.x shl 4 or 15, chunk.topYInclusive, pos.z shl 4 or 15)
+            )
+        }
+
+        fun fromChunkPos(x: Int, z: Int): Region {
+            return Region(
+                BlockPos(x shl 4, mc.world!!.bottomY, z shl 4),
+                BlockPos(x shl 4 or 15, mc.world!!.topYInclusive, z shl 4 or 15)
+            )
+        }
+
+        fun Region.getBox(): Box {
+            return Box(
+                0.0, 0.0, 0.0,
+                to.x - from.x + 1.0,
+                to.y - from.y + 1.0,
+                to.z - from.z + 1.0,
+            )
         }
     }
 
@@ -51,11 +78,6 @@ class Region(from: BlockPos, to: BlockPos) {
     val to: BlockPos
 
     val volume: Int
-        get() {
-            val delta = this.to.subtract(this.from)
-
-            return delta.x * delta.y * delta.z
-        }
 
     init {
         val fixedFrom = BlockPos(
@@ -71,27 +93,55 @@ class Region(from: BlockPos, to: BlockPos) {
 
         this.from = fixedFrom
         this.to = fixedTo
+        this.volume = (fixedTo.x - fixedFrom.x) * (fixedTo.y - fixedFrom.y) * (fixedTo.z - fixedFrom.z)
     }
 
-    fun isEmpty(): Boolean {
-        return this.from.x == this.to.x || this.from.y == this.to.y || this.from.z == this.to.z
-    }
+    private inline val xRange: IntRange
+        get() = this.from.x..this.to.x
+
+    private inline val yRange: IntRange
+        get() = this.from.y..this.to.y
+
+    private inline val zRange: IntRange
+        get() = this.from.z..this.to.z
+
+    override fun isEmpty(): Boolean = this.volume == 0
 
     operator fun contains(pos: Region): Boolean {
-        return pos.from.x >= this.from.x && pos.to.x <= this.to.x && pos.from.y >= this.from.y && pos.to.y <= this.to.y && pos.from.z >= this.from.z && pos.to.z <= this.to.z
+        return pos.xRange in xRange && pos.yRange in yRange && pos.zRange in zRange
     }
 
-    operator fun contains(pos: BlockPos): Boolean {
-        return pos.x >= this.from.x && pos.x < this.to.x && pos.y >= this.from.y && pos.y < this.to.y && pos.z >= this.from.z && pos.z < this.to.z
+    override operator fun contains(value: BlockPos): Boolean {
+        return value.x in xRange && value.y in yRange && value.z in zRange
     }
 
     fun intersects(other: Region): Boolean {
-        return this.intersects(other.from.x, other.from.y, other.from.z, other.to.x, other.to.y, other.to.z)
+        return this.intersects(
+            min = Vec3i(other.from.x, other.from.y, other.from.z),
+            max = Vec3i(other.to.x, other.to.y, other.to.z)
+        )
     }
 
-    private fun intersects(minX: Int, minY: Int, minZ: Int, maxX: Int, maxY: Int, maxZ: Int): Boolean {
-        return this.from.x <= maxX && this.to.x > minX && this.from.y <= maxY && this.to.y > minY && this.from.z <= maxZ && this.to.z > minZ
+    private fun intersects(min: Vec3i, max: Vec3i): Boolean {
+        return !(this.to.x <= min.x || this.from.x >= max.x ||
+            this.to.y <= min.y || this.from.y >= max.y ||
+            this.to.z <= min.z || this.from.z >= max.z)
     }
+
+    fun getBottomFaceCenter() = Vec3d(
+        (from.x + to.x + 1).toDouble() / 2.0,
+        from.y.toDouble(),
+        (from.z + to.z + 1).toDouble() / 2.0
+    )
+
+    fun getBoundingBox() = Box(
+        from.x.toDouble(),
+        from.y.toDouble(),
+        from.z.toDouble(),
+        to.x + 1.0,
+        to.y + 1.0,
+        to.z + 1.0
+    )
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -99,26 +149,13 @@ class Region(from: BlockPos, to: BlockPos) {
 
         other as Region
 
-        if (from != other.from) return false
-        if (to != other.to) return false
-
-        return true
+        return from == other.from && to == other.to
     }
 
     override fun hashCode(): Int {
         var result = from.hashCode()
         result = 31 * result + to.hashCode()
         return result
-    }
-
-    inline fun forEachCoordinate(function: (Int, Int, Int) -> Unit) {
-        for (x in from.x until to.x) {
-            for (y in from.y until to.y) {
-                for (z in from.z until to.z) {
-                    function(x, y, z)
-                }
-            }
-        }
     }
 
     /**
@@ -137,6 +174,21 @@ class Region(from: BlockPos, to: BlockPos) {
                 min(this.to.x, currentRegion.to.x),
                 min(this.to.y, currentRegion.to.y),
                 min(this.to.z, currentRegion.to.z)
+            )
+        )
+    }
+
+    fun union(currentRegion: Region): Region {
+        return Region(
+            BlockPos(
+                min(this.from.x, currentRegion.from.x),
+                min(this.from.y, currentRegion.from.y),
+                min(this.from.z, currentRegion.from.z)
+            ),
+            BlockPos(
+                max(this.to.x, currentRegion.to.x),
+                max(this.to.y, currentRegion.to.y),
+                max(this.to.z, currentRegion.to.z)
             )
         )
     }

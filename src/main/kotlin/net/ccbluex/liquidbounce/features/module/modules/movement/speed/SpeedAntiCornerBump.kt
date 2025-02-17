@@ -1,8 +1,27 @@
+/*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
+ *
+ * Copyright (c) 2015 - 2025 CCBlueX
+ *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ */
 package net.ccbluex.liquidbounce.features.module.modules.movement.speed
 
+import net.ccbluex.liquidbounce.features.module.MinecraftShortcuts
 import net.ccbluex.liquidbounce.utils.block.getState
-import net.ccbluex.liquidbounce.utils.client.mc
 import net.ccbluex.liquidbounce.utils.entity.SimulatedPlayer
+import net.ccbluex.liquidbounce.utils.entity.set
 import net.ccbluex.liquidbounce.utils.movement.DirectionalInput
 import net.minecraft.block.BlockState
 import net.minecraft.entity.EntityPose
@@ -13,47 +32,40 @@ import net.minecraft.util.math.Vec3d
 /**
  * Prevents you from bumping into corners when chasing.
  */
-object SpeedAntiCornerBump {
+object SpeedAntiCornerBump : MinecraftShortcuts {
     /**
      * Called when the speed mode might jump. Decides if the jump should be delayed.
      */
     fun shouldDelayJump(): Boolean {
-        val player = mc.player!!
+        val input = SimulatedPlayer.SimulatedPlayerInput.fromClientPlayer(DirectionalInput(player.input))
 
-        val input = SimulatedPlayer.SimulatedPlayerInput(
-                DirectionalInput(player.input),
-                true,
-                player.isSprinting,
-                player.isSneaking
-            )
+        input.set(
+            jump = true
+        )
 
         val simulatedPlayer = SimulatedPlayer.fromClientPlayer(input)
 
-        if (getSuggestedJumpDelay(simulatedPlayer) != null) {
-            return true
-        }
-
-        return false
+        return getSuggestedJumpDelay(simulatedPlayer) != null
     }
 
     /**
-     * Is called while the player stands on ground in order to decide if he should jump now or later.
+     * Is called while the player stands on the ground to decide if he should jump now or later.
      * Does the following steps n times:
      * 1. Jumps
      * 2. Wait until the player hits an edge. If we don't hit an edge before being on ground.
      *    We don't suggest a jump delay
      *
-     * When we hit a wall on the second jump, we suggest to delay the jump so that the second jump will be able to
+     * When we hit a wall on the second jump, we suggest delaying the jump so that the second jump will be able to
      * jump on the block.
      *
      * A delay is not suggested...
-     * - if we cannot jump on the block because there is not enough space
+     * - if we can’t jump on the block because there is not enough space
      *
      * @param n number of jumps to simulate
      *
      * @return suggested delay in ticks, if we don't suggest a delay, null
      */
-    fun getSuggestedJumpDelay(
+    private fun getSuggestedJumpDelay(
         simulatedPlayer: SimulatedPlayer,
         n: Int = 2,
     ): Int? {
@@ -67,13 +79,11 @@ object SpeedAntiCornerBump {
 
             // Jump is already good. No need to change anything about it.
             if (simulatedPlayer.onGround) {
-                jumpCount++
+                if (jumpCount++ >= n) {
+                    break
+                }
 
                 lastGroundPos = simulatedPlayer.pos
-
-                if (jumpCount > n) {
-                    return null
-                }
             }
 
             if (simulatedPlayer.horizontalCollision) {
@@ -102,9 +112,7 @@ object SpeedAntiCornerBump {
         collidingPos: Vec3d,
         lastGroundPos: Vec3d,
     ): Boolean {
-        val world = mc.world!!
-
-        val playerDims = mc.player!!.getDimensions(EntityPose.STANDING)
+        val playerDims = player.getDimensions(EntityPose.STANDING)
         val box: Box = playerDims.getBoxAt(collidingPos)
         val blockPos = BlockPos.ofFloored(box.minX - 1.0E-7, collidingPos.y, box.minZ - 1.0E-7)
         val blockPos2 = BlockPos.ofFloored(box.maxX + 1.0E-7, collidingPos.y, box.maxZ + 1.0E-7)
@@ -113,10 +121,12 @@ object SpeedAntiCornerBump {
             return false
         }
 
+        val jumpOnPos = BlockPos.Mutable(0, blockPos.y, 0)
         for (x in blockPos.x..blockPos2.x) {
             for (z in blockPos.z..blockPos2.z) {
-                val jumpOnPos = BlockPos(x, blockPos.y, z)
-                val jumpOnState = world.getBlockState(jumpOnPos)
+                jumpOnPos.x = x
+                jumpOnPos.z = z
+                val jumpOnState = jumpOnPos.getState()!!
 
                 // Simple check that asserts that we can actually reach the block with a jump.
                 if (jumpOnPos.y + 1 - lastGroundPos.y > 1.3) {

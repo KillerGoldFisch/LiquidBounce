@@ -1,7 +1,7 @@
 /*
  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- * Copyright (c) 2015 - 2023 CCBlueX
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
  * LiquidBounce is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,13 +16,13 @@
  * You should have received a copy of the GNU General Public License
  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.features.module.modules.render
 
-import net.ccbluex.liquidbounce.config.util.decode
+import kotlinx.coroutines.CancellationException
+import net.ccbluex.liquidbounce.api.core.withScope
+import net.ccbluex.liquidbounce.api.thirdparty.MojangApi
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
-import net.ccbluex.liquidbounce.utils.io.HttpClient
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.minecraft.entity.Entity
 import net.minecraft.entity.passive.HorseEntity
 import net.minecraft.entity.passive.TameableEntity
@@ -32,7 +32,6 @@ import net.minecraft.text.Style
 import net.minecraft.util.Formatting
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.Executors
 
 /**
  * MobOwners module
@@ -40,16 +39,14 @@ import java.util.concurrent.Executors
  * Shows you from which player a tamable entity or projectile belongs to.
  */
 
-object ModuleMobOwners : Module("MobOwners", Category.RENDER) {
+object ModuleMobOwners : ClientModule("MobOwners", Category.RENDER) {
 
-    val projectiles by boolean("Projectiles", false)
+    private val projectiles by boolean("Projectiles", false)
 
-    val uuidNameCache = ConcurrentHashMap<UUID, OrderedText>()
-
-    var asyncRequestExecutor = Executors.newSingleThreadExecutor()
+    private val uuidNameCache = ConcurrentHashMap<UUID, OrderedText>()
 
     fun getOwnerInfoText(entity: Entity): OrderedText? {
-        if (!this.enabled) {
+        if (!this.running) {
             return null
         }
 
@@ -61,35 +58,45 @@ object ModuleMobOwners : Module("MobOwners", Category.RENDER) {
         } ?: return null
 
         return world.getPlayerByUuid(ownerId)
-            ?.let { OrderedText.styledForwardsVisitedString(it.entityName, Style.EMPTY) }
+            ?.let { OrderedText.styledForwardsVisitedString(it.nameForScoreboard, Style.EMPTY) }
             ?: getFromMojangApi(ownerId)
     }
 
-    private fun getFromMojangApi(ownerId: UUID): OrderedText {
-        return uuidNameCache.computeIfAbsent(ownerId) {
-            this.asyncRequestExecutor.submit {
-                try {
-                    class UsernameRecord(var name: String, var changedToAt: Int?)
+    private val LOADING_TEXT = OrderedText.styledForwardsVisitedString(
+        "Loading...",
+        Style.EMPTY.withItalic(true)
+    )
 
-                    val response = decode<Array<UsernameRecord>>(HttpClient.get("https://api.mojang.com/user/profiles/${it.toString().replace("-", "")}/names"))
+    private val FAILED_TEXT = OrderedText.styledForwardsVisitedString(
+        "Failed to query Mojang API",
+        Style.EMPTY.withItalic(true).withColor(Formatting.RED)
+    )
+
+    private val CANCELED_TEXT = OrderedText.styledForwardsVisitedString(
+        "Query is canceled",
+        Style.EMPTY.withItalic(true).withColor(Formatting.YELLOW)
+    )
+
+    @Suppress("SwallowedException")
+    private fun getFromMojangApi(ownerId: UUID): OrderedText {
+        return uuidNameCache.putIfAbsent(ownerId, LOADING_TEXT) ?: run {
+            withScope {
+                uuidNameCache[ownerId] = try {
+                    val uuidAsString = ownerId.toString().replace("-", "")
+                    val response = MojangApi.getNames(uuidAsString)
 
                     val entityName = response.first { it.changedToAt == null }.name
 
-                    uuidNameCache[it] = OrderedText.styledForwardsVisitedString(entityName, Style.EMPTY)
-                } catch (e: InterruptedException) {
+                    OrderedText.styledForwardsVisitedString(entityName, Style.EMPTY)
+                } catch (e: CancellationException) {
+                    CANCELED_TEXT
                 } catch (e: Exception) {
-                    uuidNameCache[it] = OrderedText.styledForwardsVisitedString("Failed to query Mojang API", Style.EMPTY.withItalic(true).withColor(Formatting.RED))
+                    FAILED_TEXT
                 }
             }
 
-            OrderedText.styledForwardsVisitedString("Loading", Style.EMPTY.withItalic(true))
+            LOADING_TEXT
         }
-    }
-
-    override fun disable() {
-        this.asyncRequestExecutor.shutdownNow()
-
-        this.asyncRequestExecutor = Executors.newSingleThreadExecutor()
     }
 
 }

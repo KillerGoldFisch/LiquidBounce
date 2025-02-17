@@ -1,48 +1,49 @@
 /*
+ * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
  *
- *  * This file is part of LiquidBounce (https://github.com/CCBlueX/LiquidBounce)
- *  *
- *  * Copyright (c) 2015 - 2023 CCBlueX
- *  *
- *  * LiquidBounce is free software: you can redistribute it and/or modify
- *  * it under the terms of the GNU General Public License as published by
- *  * the Free Software Foundation, either version 3 of the License, or
- *  * (at your option) any later version.
- *  *
- *  * LiquidBounce is distributed in the hope that it will be useful,
- *  * but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- *  * GNU General Public License for more details.
- *  *
- *  * You should have received a copy of the GNU General Public License
- *  * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
+ * Copyright (c) 2015 - 2025 CCBlueX
  *
+ * LiquidBounce is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * LiquidBounce is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with LiquidBounce. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package net.ccbluex.liquidbounce.features.module.modules.misc
 
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import net.ccbluex.liquidbounce.api.thirdparty.OPENAI_BASE_URL
+import net.ccbluex.liquidbounce.api.thirdparty.OpenAiApi
 import net.ccbluex.liquidbounce.event.events.ChatReceiveEvent
-import net.ccbluex.liquidbounce.event.repeatable
 import net.ccbluex.liquidbounce.event.sequenceHandler
+import net.ccbluex.liquidbounce.event.tickHandler
 import net.ccbluex.liquidbounce.features.module.Category
-import net.ccbluex.liquidbounce.features.module.Module
+import net.ccbluex.liquidbounce.features.module.ClientModule
 import net.ccbluex.liquidbounce.utils.client.Chronometer
 import net.ccbluex.liquidbounce.utils.client.chat
-import net.ccbluex.liquidbounce.utils.openai.Gpt
-import kotlin.concurrent.thread
+import net.ccbluex.liquidbounce.utils.client.logger
 
 /**
  * Automatically solves chat game riddles.
  */
-object ModuleAutoChatGame : Module("AutoChatGame", Category.MISC) {
+object ModuleAutoChatGame : ClientModule("AutoChatGame", Category.MISC) {
 
+    private val baseUrl by text("BaseUrl", OPENAI_BASE_URL)
+        .doNotIncludeAlways() // Keeps API key private
     private val openAiKey by text("OpenAiKey", "")
-        .doNotInclude() // Keeps API key private
-    private val model by text("Model", "gpt-4")
-    private val delayResponse by intRange("ReactionTime", 1000..5000, 0..10000)
-    private val cooldownMinutes by int("Cooldown", 2, 0..60)
-    private val bufferTime by int("BufferTime", 200, 0..500)
+        .doNotIncludeAlways() // Keeps API key private
+    private val model by text("Model", "gpt-4o-mini") // GPT 4O Mini should be enough for this
+    private val delayResponse by intRange("ReactionTime", 1000..5000, 0..10000,
+        "ms")
+    private val cooldownMinutes by int("Cooldown", 2, 0..60, "minutes")
+    private val bufferTime by int("BufferTime", 200, 0..500, "ms")
     private val triggerSentence by text("TriggerSentence", "Chat Game")
     private val includeTrigger by boolean("IncludeTrigger", true)
     private val serverName by text("ServerName", "Minecraft")
@@ -72,7 +73,7 @@ object ModuleAutoChatGame : Module("AutoChatGame", Category.MISC) {
         Amethyst geodes spawn at Y level and below in 1.18 -> 30,
         Minecraft's moon has the same amount of lunar phases as the moon in real life -> true
         ]
-        """.trimIndent().replace("\n", " ")
+        """.trimIndent().replace('\n', ' ')
     private val prompt by text("Prompt", defaultPrompt)
 
     override fun enable() {
@@ -87,6 +88,7 @@ object ModuleAutoChatGame : Module("AutoChatGame", Category.MISC) {
     private val triggerWordChronometer = Chronometer()
     private val cooldownChronometer = Chronometer()
 
+    @Suppress("unused")
     val chatHandler = sequenceHandler<ChatReceiveEvent> { event ->
         val message = event.message
 
@@ -97,8 +99,7 @@ object ModuleAutoChatGame : Module("AutoChatGame", Category.MISC) {
 
         // Auto GG
         if (message.contains("Show some love by typing")) {
-            delay(delayResponse.random().toLong())
-
+            waitTicks(delayResponse.random() / 50)
             network.sendChatMessage("gg")
             return@sequenceHandler
         }
@@ -126,57 +127,53 @@ object ModuleAutoChatGame : Module("AutoChatGame", Category.MISC) {
         }
     }
 
-    val repeatable = repeatable {
-        // Has the trigger word been said and has the buffer time elapsed?
-        if (triggerWordChronometer.hasElapsed(bufferTime.toLong())) {
+    @Suppress("unused")
+    val tickHandler = tickHandler {
+        waitUntil {
+            // Has the trigger word been said and has the buffer time elapsed?
+            triggerWordChronometer.hasElapsed(bufferTime.toLong())
             // Is the buffer empty? - If it is we already answered the question.
-            if (chatBuffer.isEmpty()) {
-                return@repeatable
-            }
-
-            // Handle questions
-            var question = chatBuffer.joinToString(" ")
-            chatBuffer.clear()
-            cooldownChronometer.reset()
-
-            // Remove double spaces
-            while (question.contains("  ")) {
-                question = question.replace("  ", " ")
-            }
-
-            // Remove leading and trailing whitespace
-            question = question.trim()
-
-            chat("§aUnderstood question: $question")
-
-            // Create new AI instance with OpenAI key
-            val ai = Gpt(openAiKey, model, prompt.replace("{SERVER_NAME}", serverName))
-
-            thread {
-                runCatching {
-                    val startAsk = System.currentTimeMillis()
-                    var answer = ai.requestNewAnswer(question)
-
-                    // Remove dot on the end of answer
-                    if (answer.last() == '.') {
-                        answer = answer.substring(0, answer.length - 1)
-                    }
-
-                    chat("§aAnswer: $answer, took ${System.currentTimeMillis() - startAsk}ms.")
-
-                    val delay = delayResponse.random()
-                    chat("§aAnswering question: $answer, waiting for ${delay}ms.")
-
-                    Thread.sleep(delay.toLong())
-
-                    // Send answer
-                    network.sendChatMessage(answer)
-                }.onFailure {
-                    it.printStackTrace()
-                    chat("§cFailed to answer question: ${it.message}")
-                }
-            }
+                && chatBuffer.isNotEmpty()
         }
+
+        // Handle questions
+        val question = chatBuffer
+            .joinToString(" ")
+            // Remove duplicated spaces
+            .replace(Regex("\\s+"), " ")
+            // Remove leading and trailing whitespace
+            .trim()
+
+        chatBuffer.clear()
+        cooldownChronometer.reset()
+
+        chat("§aUnderstood question: $question")
+
+        val startAsk = System.currentTimeMillis()
+
+        val answer = waitFor(Dispatchers.IO) {
+            runCatching {
+                // Create new AI instance with OpenAI key
+                val ai = OpenAiApi(baseUrl, openAiKey, model, prompt.replace("{SERVER_NAME}", serverName))
+
+                ai.requestNewAnswer(question).trimEnd {
+                    // Remove dot on the end of answer
+                    it == '.'
+                }
+            }.onFailure {
+                logger.error("GPT AutoChatGame failed", it)
+                chat("§cFailed to answer question: ${it.message}")
+            }.getOrNull()
+        } ?: return@tickHandler
+
+        chat("§aAnswer: $answer, took ${System.currentTimeMillis() - startAsk}ms.")
+
+        val delay = delayResponse.random()
+        chat("§aAnswering question: $answer, waiting for ${delay}ms.")
+        waitTicks(delay / 50)
+
+        // Send answer
+        network.sendChatMessage(answer)
     }
 
 }
